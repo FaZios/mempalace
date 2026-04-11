@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "mempalace": {
+      "command": "C:\\Users\\FaZio\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "args": [
+        "-m",
+        "mempalace.mcp_server",
+        "--palace",
+        "C:\\Users\\FaZio\\.mempalace\\palace"
+      ]
+    }
+  }
+}
