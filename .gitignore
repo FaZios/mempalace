@@ -37,3 +37,7 @@ venv/
 # ChromaDB local data
 *.sqlite3-journal
 .envrc
+
+# Benchmark results (#1)
+benchmarks/results_*.jsonl
+benchmarks/results_*.json
