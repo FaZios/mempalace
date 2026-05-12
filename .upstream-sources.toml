@@ -15,6 +15,10 @@ branch = "main"
 sync_policy = "cherry-pick"
 last_synced_sha = "TBD"
 push_to_upstream = false
+relation = "diverged_fork"
+divergence_note = "314 commits behind upstream as of 2026-05-12, fork uses different architecture (Windows-line-ending source, different test layout). Architectural review needed before any future sync attempt."
+last_sync_attempt = "2026-05-12"
+sync_blocked = true
 
 # Sezioni auto-popolate da scripts/discovery/:
 #   [architecture] ← architecture_extractor.py
