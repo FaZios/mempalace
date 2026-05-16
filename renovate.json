@@ -1,0 +1,94 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":semanticCommitTypeAll(chore)",
+    ":enableVulnerabilityAlertsWithLabel(security)",
+    ":dependencyDashboard"
+  ],
+  "timezone": "Europe/Rome",
+  "schedule": [
+    "before 8am on monday"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "prHourlyLimit": 4,
+  "prConcurrentLimit": 8,
+  "packageRules": [
+    {
+      "description": "Auto-merge patch + minor for non-critical deps",
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Group critical deps (manual review)",
+      "matchPackagePatterns": [
+        "^anthropic",
+        "^claude-",
+        "^litellm",
+        "^fastapi",
+        "^playwright",
+        "^patchright"
+      ],
+      "groupName": "critical deps (review)",
+      "automerge": false,
+      "addLabels": [
+        "critical-dep"
+      ]
+    },
+    {
+      "description": "Group dev tooling",
+      "matchDepTypes": [
+        "devDependencies"
+      ],
+      "groupName": "dev tooling",
+      "automerge": true,
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ]
+    },
+    {
+      "description": "Pin Docker images (no floating tags)",
+      "matchDatasources": [
+        "docker"
+      ],
+      "pinDigests": true
+    },
+    {
+      "description": "Major bumps: never auto-merge",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false,
+      "addLabels": [
+        "major-bump"
+      ]
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": [
+      "security",
+      "critical-dep"
+    ],
+    "automerge": false,
+    "schedule": [
+      "at any time"
+    ]
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 8am on monday"
+    ]
+  },
+  "rangeStrategy": "bump",
+  "rebaseWhen": "behind-base-branch",
+  "configMigration": true
+}
