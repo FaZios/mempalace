@@ -6,19 +6,18 @@
 name = "mempalace"
 verdict = "FORK"
 created = "2026-05-12"
-last_audit = "2026-05-12"
+last_audit = "2026-07-06"
 
 [[true_forks]]
 name = "upstream"
 url = "https://github.com/milla-jovovich/mempalace.git"
 branch = "main"
-sync_policy = "cherry-pick"
-last_synced_sha = "TBD"
+sync_policy = "adopt-upstream-tree"
+last_synced_sha = "5cbc37ee9b59c1c5daf5748a555b7bc91ca103b8"  # v3.5.0, merge 534e078 2026-07-06
 push_to_upstream = false
-relation = "diverged_fork"
-divergence_note = "314 commits behind upstream as of 2026-05-12, fork uses different architecture (Windows-line-ending source, different test layout). Architectural review needed before any future sync attempt."
-last_sync_attempt = "2026-05-12"
-sync_blocked = true
+relation = "tracking_fork"
+divergence_note = "Review 2026-07-06: il sync_blocked del 2026-05-12 era FALSO POSITIVO — la 'divergenza architetturale' era un flip CRLF senza diff semantico (git diff -w = 0). Custom Fazio = solo meta-doc scaffolding, zero logica. v3.3.5->v3.5.0 adottato in blocco, test 3102 pass. Sync futuri: adozione albero upstream per path upstream-owned + preserva file solo-Fazio."
+last_sync_attempt = "2026-07-06"
 
 # Sezioni auto-popolate da scripts/discovery/:
 #   [architecture] ← architecture_extractor.py
