@@ -73,7 +73,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Resolved tag: $tag"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Fully-qualified refs/tags/ so an unqualified name can't resolve to a
           # same-named *branch* instead of the tag (checkout prefers branches).
@@ -111,7 +111,7 @@ jobs:
           fi
           echo "Tag $TAG matches manifest version $py_version — OK."
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
