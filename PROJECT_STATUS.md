@@ -6,7 +6,7 @@
 > Le sezioni 1-3 e 9-10 sono **stabili** (cambiano solo se cambia il progetto).
 > Le sezioni 4-8 sono **dinamiche** (refreshate ogni sessione).
 
-**Last Updated:** 2026-05-10T00:00:00Z
+**Last Updated:** 2026-08-23T00:00:00Z (audit autonomo m710q; stato canonico aggiornato = STATUS.md + NEXT.md)
 **Last Session ID:** init-2026-05-10
 **Owner:** FaZio (fork user-scope) â€” upstream: MemPalace org / milla-jovovich
 
@@ -14,10 +14,10 @@
 
 ## 1. Project Identity
 - Name: mempalace
-- Path: E:\Projects\mempalace
-- Repo / Remote: https://github.com/milla-jovovich/mempalace.git (origin) â€” upstream e fork distinti dell'organizzazione MemPalace; user FaZio usa user-scope binary `mempalace-mcp` (vedi memoria utente)
+- Path: `~/Projects/mempalace` (m710q: `/data/Projects/mempalace`, runtime editable; PC Windows: `E:\Projects\mempalace`)
+- Repo / Remote: origin = `git@github.com:FaZios/mempalace.git` (fork privato); upstream = https://github.com/MemPalace/mempalace (ex milla-jovovich) â€” upstream e fork distinti dell'organizzazione MemPalace; user FaZio usa user-scope binary `mempalace-mcp` (vedi memoria utente)
 - One-line purpose: Local-first AI memory engine â€” verbatim conversation storage + semantic retrieval (ChromaDB di default, backend pluggable). Wings (people/projects), Rooms (time-based), Drawers (verbatim content) + AAAK compression. MCP server espone tool read/write a Claude/Gemini/Codex. Zero API key richiesta. (NB: questo e un fork upstream di terze parti, NON un progetto Fazio originale.)
-- Status: stable (v3.3.3, Development Status :: 4 - Beta) â€” attivo, recently merged PRs
+- Status: stable (v3.8.0 adottata da upstream il 2026-08-23, Development Status :: 4 - Beta) â€” attivo, recently merged PRs
 
 ## 2. Tech Stack
 - Languages: Python (~30+ moduli mempalace/, ~25+ test files), YAML (config), Markdown
@@ -48,7 +48,7 @@
 - What works: v3.3.3 released, MCP server stable, ChromaDB backend production-ready, hybrid search BM25+vector, knowledge graph SQLite + temporal, AAAK compression, plugin framework (backends + sources entry-points), per-language i18n module
 - Work in progress: source adapters core migration (miner.py + convo_miner.py to BaseSourceAdapter, follow-up PR pending per RFC 002); recent PRs su entity-detection init overhaul (3.3.3 changelog), security palace path env normalize, init project dedup case-insensitive
 - Broken / Disabled: 1 TODO in `mcp_server.py:961` (AAAK expand before embedding per migliorare retrieval)
-- Open branches: solo main (locale); upstream usa develop branch (PR rescue stacked PRs into develop visible in log)
+- Open branches: `main` (upstream tree + meta Fazio) e `develop` (mirror 1:1 di upstream develop, è il runtime editable su m710q — mai commit locali)
 
 ## 5. Last Session Summary  (dinamico)
 - Date: 2026-05-10
@@ -83,7 +83,7 @@
 - 1 TODO in mcp_server.py (AAAK pre-embed expansion)
 - Scam alert documentato: `mempalace.tech` e impostor; sources ufficiali = github.com/MemPalace/mempalace + PyPI + mempalaceofficial.com
 - LongMemEval 100% non headlinato perche ultimo 0.6% e "teaching to test" (honesty disclaimer)
-- Repo origin punta a `milla-jovovich` (account fork) anziche a org `MemPalace`; verificare se intenzionale o se reset remote needed
+- (risolto 2026-08-23) origin = FaZios/mempalace; upstream canonico MemPalace/mempalace registrato in `.upstream-sources.toml`
 
 ## 9. How to Run / Test  (stabile)
 ```
