@@ -11,7 +11,7 @@ Aggiornato 2026-08-23 (audit autonomo su m710q).
 - [ ] Decidere se il mirror `develop` va anche pushato su `FaZios/mempalace` da un job (oggi arriva già aggiornato: ff-only quotidiano da qualche sync esterno — origine non documentata). verify: una riga in DECISIONS.md o in `.upstream-sources.toml` che dice chi aggiorna `origin/develop`.
 
 ## P2 (this week)
-- [ ] Full test suite su host non di produzione (PC): `uv run pytest tests/ -q --ignore=tests/benchmarks` sull'albero 3.8.0 (il 2026-08-23 su m710q con load >100 si è girato solo il subset mcp_proxy/config/sync/cli/version). verify: 0 failed.
+- [x] ~~Full test suite su host non di produzione (PC)~~ — fatta il 2026-08-23 su m710q a load basso (nice 19, venv scratch, albero 3.8.0): `pytest tests/ -q --ignore=tests/benchmarks` → 4468 passed, 31 skipped, 0 failed in 230s.
 - [ ] `DASHBOARD.md` / `PROJECT_STATUS.md` sono "auto-generati" ma nessun hook li tocca da maggio: o si riattiva il generatore o si declassano a puntatori verso STATUS.md. verify: data "Ultimo refresh" ≤ 30 giorni oppure file ridotto a 5 righe.
 
 ## P3 (nice to have)

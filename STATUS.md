@@ -13,7 +13,7 @@ Active — fork di tracking di `MemPalace/mempalace`, policy `adopt-upstream-tre
 - **MCP `mempalace` in user-scope è ROTTO** su m710q: `~/.claude.json` punta a `~/.local/share/uv/tools/mempalace/bin/mempalace-mcp` (non esiste; `claude mcp get mempalace` → ENOENT). Lo script `claude-config/scripts/mempalace-install.sh` scrive `~/.claude/.mcp.json` (file che Claude Code non legge) e passa `MEMPALACE_DATA_DIR` (env var inesistente in mempalace: quella vera è `MEMPALACE_PALACE_PATH` o `--palace`). Fix = TODO.md P0 (repo claude-config, non questo).
 
 ## Ultima attività reale
-2026-08-23 — sync upstream 3.5.0 → 3.8.0 (953 commit adottati in blocco, ruff pulito, subset test verde, vedi NEXT.md).
+2026-08-23 — sync upstream 3.5.0 → 3.8.0 (953 commit adottati in blocco, ruff pulito, full suite 4468 passed in review, vedi NEXT.md).
 
 ## Prossimo passo
 Vedi NEXT.md.

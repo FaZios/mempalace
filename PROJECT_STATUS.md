@@ -45,7 +45,7 @@
 - pyproject.toml -- entry points: `mempalace`, `mempalace-mcp`; ruff + pytest + coverage config
 
 ## 4. Current State  (dinamico)
-- What works: v3.3.3 released, MCP server stable, ChromaDB backend production-ready, hybrid search BM25+vector, knowledge graph SQLite + temporal, AAAK compression, plugin framework (backends + sources entry-points), per-language i18n module
+- What works: v3.8.0 adottata (2026-08-23; al primo audit era v3.3.3), MCP server stable, ChromaDB backend production-ready, hybrid search BM25+vector, knowledge graph SQLite + temporal, AAAK compression, plugin framework (backends + sources entry-points), per-language i18n module
 - Work in progress: source adapters core migration (miner.py + convo_miner.py to BaseSourceAdapter, follow-up PR pending per RFC 002); recent PRs su entity-detection init overhaul (3.3.3 changelog), security palace path env normalize, init project dedup case-insensitive
 - Broken / Disabled: 1 TODO in `mcp_server.py:961` (AAAK expand before embedding per migliorare retrieval)
 - Open branches: `main` (upstream tree + meta Fazio) e `develop` (mirror 1:1 di upstream develop, è il runtime editable su m710q — mai commit locali)

@@ -1,7 +1,7 @@
 # NEXT — mempalace
 
 **Next**: riparare l'entry MCP `mempalace` user-scope su m710q (repo `claude-config`, non qui) — `~/.claude.json` punta a un binario inesistente.
-**Why**: `claude mcp get mempalace` → ENOENT su `~/.local/share/uv/tools/mempalace/bin/mempalace-mcp`; il binario reale è `~/.mempalace-venv/bin/mempalace-mcp` (editable su questo clone). Finché è rotto, `mcp__mempalace__*` (recall semantico skill, regola 23b globale) non esiste nelle sessioni su m710q.
+**Why**: `claude mcp get mempalace` → ENOENT su `~/.local/share/uv/tools/mempalace/bin/mempalace-mcp`; il binario reale è `~/.mempalace-venv/bin/mempalace-mcp` (editable su questo clone). Finché è rotto, `mcp__mempalace__*` (recall semantico skill, regola 23 globale "Cross-Project Knowledge Graph") non esiste nelle sessioni su m710q.
 **Steps**:
 1. `claude mcp remove mempalace -s user`
 2. `claude mcp add -s user mempalace -- /home/dietpi/.mempalace-venv/bin/mempalace-mcp --palace /home/dietpi/.mempalace/palace`
