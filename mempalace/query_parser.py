@@ -601,7 +601,7 @@ def parse_query_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # noqa: C
         elif tok_upper == "CONTEXT" and i + 1 < n:
             params["context"] = tokens[i + 1]
             i += 2
-        elif ":" in tok and not tok.startswith("http"):
+        elif ":" in tok and not tok.startswith("http") and not isinstance(tok, QuotedToken):
             k, v = tok.split(":", 1)
             params[k.lower()] = _parse_val(v)
             i += 1
@@ -794,7 +794,7 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # noqa: C9
             elif tok_upper == "ADDED_BY" and i + 1 < n:
                 params["added_by"] = tokens[i + 1]
                 i += 2
-            elif ":" in tok:
+            elif ":" in tok and not isinstance(tok, QuotedToken):
                 k, v = tok.split(":", 1)
                 params[k.lower()] = _parse_val(v)
                 i += 1
@@ -1175,6 +1175,10 @@ def parse_coordinate_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # no
             params["type"] = params.pop("event_type")
         elif "event_type" in params:
             params.pop("event_type")
+        if action == "patch_submit" and "content" not in params and "diff" in params:
+            params["content"] = params.pop("diff")
+        elif "diff" in params:
+            params.pop("diff")
         return action, params
 
     if isinstance(input_data, str) and input_data.strip().startswith("{"):

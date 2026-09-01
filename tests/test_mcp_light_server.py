@@ -595,3 +595,44 @@ class TestHubDispatch:
         assert captured["name"] == "mempalace_add_drawer"
         assert captured["arguments"]["wing"] == "project_auth"
         assert captured["arguments"]["room"] == "room"
+
+    def test_read_only_blocks_exec_before_hub_forward(self, monkeypatch, config, kg):
+        _patch_light_server(monkeypatch, config, kg)
+        monkeypatch.setattr(mcp_server, "_READ_ONLY", True)
+        forwarded = []
+        monkeypatch.setattr(mcp_server, "_hub_proxy_target", lambda: ("http://127.0.0.1:9", {}))
+
+        def fake_forward(base_url, headers, request, palace_path):
+            forwarded.append(request)
+            return {"jsonrpc": "2.0", "id": request["id"], "result": {}}
+
+        monkeypatch.setattr(mcp_server, "_forward_request_to_hub", fake_forward)
+        req = {
+            "jsonrpc": "2.0",
+            "id": 94,
+            "method": "tools/call",
+            "params": {
+                "name": "palace_exec",
+                "arguments": 'ADD IN test_wing/test_room "content" SOURCE test.md',
+            },
+        }
+        res = mcp_light_server.dispatch_light_stdio_request(req)
+        assert res["error"]["code"] == -32003
+        assert forwarded == []
+
+    def test_malformed_limit_does_not_raise(self, monkeypatch, config, kg):
+        _patch_light_server(monkeypatch, config, kg)
+        req = {
+            "jsonrpc": "2.0",
+            "id": 95,
+            "method": "tools/call",
+            "params": {"name": "palace_query", "arguments": "FIND x LIMIT nope"},
+        }
+        res = mcp_light_server.dispatch_light_stdio_request(req)
+        payload = json.loads(res["result"]["content"][0]["text"])
+        assert payload["success"] is False
+        assert (
+            "nope" in payload["error"]
+            or "invalid" in payload["error"].lower()
+            or "PQL" in payload["error"]
+        )

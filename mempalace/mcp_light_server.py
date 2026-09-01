@@ -874,7 +874,7 @@ def _rewrite_tools_call_for_hub(request: Dict[str, Any]):
             _, parsed = parse_exec_input(unwrapped)
         else:
             _, parsed = parse_coordinate_input(unwrapped)
-    except QueryParseError as exc:
+    except (QueryParseError, ValueError, TypeError) as exc:
         return {"_parse_error": True, "message": str(exc)}
 
     taxonomy_wing = None
@@ -958,7 +958,14 @@ def dispatch_light_stdio_request(request: Dict[str, Any]) -> Optional[Dict[str, 
             }
         if rewritten is not None:
             forwarded = {k: v for k, v in rewritten.items() if not k.startswith("_")}
-            resp = mcp_server._dispatch_stdio_request(forwarded)
+            underlying = ((forwarded.get("params") or {}).get("name")) or ""
+            refusal = mcp_server._mcp_tool_preflight_refusal(request.get("id"), underlying)
+            if refusal is not None:
+                return refusal
+            try:
+                resp = mcp_server._dispatch_stdio_request(forwarded)
+            except Exception as exc:
+                return mcp_server._internal_tool_error(request.get("id"), underlying, exc)
             return _postprocess_light_response(rewritten, resp)
     return handle_light_request(request)
 
@@ -1017,7 +1024,11 @@ def main():
             req = json.loads(line)
         except json.JSONDecodeError:
             continue
-        resp = dispatch_light_stdio_request(req)
+        try:
+            resp = dispatch_light_stdio_request(req)
+        except Exception as exc:
+            logger.error("Server error: %s", exc)
+            continue
         if resp is not None:
             try:
                 sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")

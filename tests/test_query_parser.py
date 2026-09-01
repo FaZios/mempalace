@@ -62,6 +62,10 @@ class TestPalaceQueryParser:
         assert params["wing"] == "wing_core"
         assert params["max_distance"] == 1.2
 
+        target, params = parse_query_input('FIND "status: active"')
+        assert target == "search"
+        assert params["query"] == "status: active"
+
     def test_taxonomy_and_wings(self):
         target, params = parse_query_input("TAXONOMY")
         assert target == "taxonomy"
@@ -158,6 +162,12 @@ class TestPalaceExecParser:
         assert params["content"] == "use jwt tokens"
         assert params["source_file"] == "auth.py"
         assert params["added_by"] == "agent1"
+
+        target, params = parse_exec_input('ADD IN notes/day "status: active"')
+        assert target == "add_drawer"
+        assert params["content"] == "status: active"
+        assert params["wing"] == "notes"
+        assert params["room"] == "day"
 
     def test_update_and_delete_drawer(self):
         target, params = parse_exec_input(
@@ -449,3 +459,16 @@ class TestPalaceCoordinateParser:
         assert action == "event_append"
         assert params["type"] == "task.request"
         assert "event_type" not in params
+
+    def test_structured_patch_diff_maps_to_content(self):
+        action, params = parse_coordinate_input(
+            {
+                "action": "patch_submit",
+                "diff": "diff --git a/b",
+                "from_agent": "a",
+                "stream": "project/x",
+            }
+        )
+        assert action == "patch_submit"
+        assert params["content"] == "diff --git a/b"
+        assert "diff" not in params
