@@ -135,8 +135,13 @@ def _parse_key_value_tokens(tokens: List[str]) -> Dict[str, Any]:
             i += 2
             continue
 
-        # Case 2: tok is "key:value"
-        if ":" in tok and not tok.startswith("http://") and not tok.startswith("https://"):
+        # Case 2: tok is "key:value" (quoted tokens stay verbatim content)
+        if (
+            ":" in tok
+            and not tok.startswith("http://")
+            and not tok.startswith("https://")
+            and not isinstance(tok, QuotedToken)
+        ):
             k, v = tok.split(":", 1)
             k = k.lower().strip()
             if k:
@@ -177,6 +182,8 @@ def _parse_key_value_tokens(tokens: List[str]) -> Dict[str, Any]:
 
 def _parse_val(val: str) -> Any:
     """Parse string representation of boolean, integer, float, or JSON into native type."""
+    if isinstance(val, QuotedToken):
+        return str(val)
     v_lower = val.lower()
     if v_lower == "true":
         return True
@@ -684,6 +691,8 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # noqa: C9
                 action = "create_tunnel"
             elif "agent" in params and ("entry" in params or "content" in params):
                 action = "diary_write"
+            elif "items" in params:
+                action = "checkpoint"
             else:
                 action = "add_drawer"
 
@@ -699,6 +708,10 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # noqa: C9
             action = "kg_add"
             if "object" not in params and "obj" in params:
                 params["object"] = params.pop("obj")
+        elif action in ("kg_invalidate", "invalidate"):
+            action = "kg_invalidate"
+            if "ended" not in params and "valid_to" in params:
+                params["ended"] = params.pop("valid_to")
         elif action in ("diary_write", "diary"):
             action = "diary_write"
             if "diary" in params and isinstance(params["diary"], dict):
@@ -1026,7 +1039,7 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # noqa: C9
                 elif tok_upper == "WING" and i + 1 < n:
                     wing = remaining[i + 1]
                     i += 2
-                elif ":" in tok and not tok.startswith("http"):
+                elif ":" in tok and not tok.startswith("http") and not isinstance(tok, QuotedToken):
                     k, v = tok.split(":", 1)
                     if k.lower() == "topic":
                         topic = v

@@ -190,6 +190,12 @@ class TestPalaceExecParser:
         assert params["drawer_id"] == "drw_1"
         assert params["content"] == "NASA"
 
+        for quoted in ("00123", "true", "null"):
+            target, params = parse_exec_input(f'UPDATE drw_1 CONTENT "{quoted}"')
+            assert target == "update_drawer"
+            assert params["content"] == quoted
+            assert isinstance(params["content"], str)
+
     def test_structured_drawer_id_plus_content_is_update(self):
         action, params = parse_exec_input({"drawer_id": "drw_1", "content": "replacement"})
         assert action == "update_drawer"
@@ -217,6 +223,10 @@ class TestPalaceExecParser:
         assert target == "checkpoint"
         assert params == {"items": [{"wing": "w", "room": "r", "content": "c"}]}
 
+        target, params = parse_exec_input({"items": [{"wing": "w", "room": "r", "content": "c"}]})
+        assert target == "checkpoint"
+        assert params == {"items": [{"wing": "w", "room": "r", "content": "c"}]}
+
     def test_kg_add_invalidate_supersede(self):
         target, params = parse_exec_input("KG ADD Max -> loves -> chess FROM 2026-01-01")
         assert target == "kg_add"
@@ -235,6 +245,19 @@ class TestPalaceExecParser:
             "object": "soccer",
             "ended": "2026-05-01",
         }
+
+        target, params = parse_exec_input(
+            {
+                "action": "kg_invalidate",
+                "subject": "Max",
+                "predicate": "plays",
+                "object": "soccer",
+                "valid_to": "2020-01-01",
+            }
+        )
+        assert target == "kg_invalidate"
+        assert params["ended"] == "2020-01-01"
+        assert "valid_to" not in params
 
         target, params = parse_exec_input("KG SUPERSEDE Max -> grade: 6 => 7 AT 2026-09-01")
         assert target == "kg_supersede"
@@ -303,6 +326,13 @@ class TestPalaceExecParser:
             "agent_name": "antigravity",
             "entry": "SESSION|added auth module",
             "topic": "auth",
+        }
+
+        target, params = parse_exec_input('DIARY WRITE bot "topic: exact observation"')
+        assert target == "diary_write"
+        assert params == {
+            "agent_name": "bot",
+            "entry": "topic: exact observation",
         }
 
     def test_reconnect_and_settings(self):

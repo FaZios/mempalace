@@ -342,6 +342,23 @@ class TestLightMcpPreflightAndGates:
             mcp_light_server._classify_underlying_tool("palace_query", "SETTINGS")
             == "mempalace_hook_settings"
         )
+        assert (
+            mcp_light_server._classify_underlying_tool("palace_query", "TRAVERSE auth-flow")
+            == "mempalace_traverse"
+        )
+
+    def test_alias_valid_to_to_ended_for_invalidate(self):
+        mapped = mcp_light_server._alias_args_for_handler(
+            mcp_server.tool_kg_invalidate,
+            {
+                "subject": "Max",
+                "predicate": "plays",
+                "object": "soccer",
+                "valid_to": "2020-01-01",
+            },
+        )
+        assert mapped["ended"] == "2020-01-01"
+        assert "valid_to" not in mapped
 
 
 class TestUnwrapAndStructuredMerge:
@@ -636,3 +653,64 @@ class TestHubDispatch:
             or "invalid" in payload["error"].lower()
             or "PQL" in payload["error"]
         )
+
+    def test_tools_call_maps_kg_invalidate_valid_to_to_ended(self, monkeypatch, config, kg):
+        _patch_light_server(monkeypatch, config, kg)
+        captured = {}
+        monkeypatch.setattr(mcp_server, "_hub_proxy_target", lambda: ("http://127.0.0.1:9", {}))
+
+        def fake_forward(base_url, headers, request, palace_path):
+            captured["name"] = request["params"]["name"]
+            captured["arguments"] = request["params"]["arguments"]
+            return {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {"content": [{"type": "text", "text": "{}"}]},
+            }
+
+        monkeypatch.setattr(mcp_server, "_forward_request_to_hub", fake_forward)
+        req = {
+            "jsonrpc": "2.0",
+            "id": 96,
+            "method": "tools/call",
+            "params": {
+                "name": "palace_exec",
+                "arguments": {
+                    "action": "kg_invalidate",
+                    "subject": "Max",
+                    "predicate": "plays",
+                    "object": "soccer",
+                    "valid_to": "2020-01-01",
+                },
+            },
+        }
+        mcp_light_server.dispatch_light_stdio_request(req)
+        assert captured["name"] == "mempalace_kg_invalidate"
+        assert captured["arguments"]["ended"] == "2020-01-01"
+        assert "valid_to" not in captured["arguments"]
+
+    def test_tools_call_maps_traverse_to_registered_tool(self, monkeypatch, config, kg):
+        _patch_light_server(monkeypatch, config, kg)
+        captured = {}
+        monkeypatch.setattr(mcp_server, "_hub_proxy_target", lambda: ("http://127.0.0.1:9", {}))
+
+        def fake_forward(base_url, headers, request, palace_path):
+            captured["name"] = request["params"]["name"]
+            captured["arguments"] = request["params"]["arguments"]
+            return {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {"content": [{"type": "text", "text": "{}"}]},
+            }
+
+        monkeypatch.setattr(mcp_server, "_forward_request_to_hub", fake_forward)
+        req = {
+            "jsonrpc": "2.0",
+            "id": 97,
+            "method": "tools/call",
+            "params": {"name": "palace_query", "arguments": "TRAVERSE auth-flow HOPS 3"},
+        }
+        mcp_light_server.dispatch_light_stdio_request(req)
+        assert captured["name"] == "mempalace_traverse"
+        assert captured["arguments"]["start_room"] == "auth-flow"
+        assert captured["arguments"]["max_hops"] == 3

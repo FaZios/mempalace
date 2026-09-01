@@ -119,31 +119,8 @@ def _call_handler_safe(handler, params: Dict[str, Any]) -> Dict[str, Any]:
     """Invoke handler safely by filtering extra kwargs that the handler doesn't accept."""
     if not callable(handler):
         return {"success": False, "error": f"Handler {handler} is not callable"}
-
-    sig = inspect.signature(handler)
-    has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
-    if has_var_keyword:
-        return handler(**params)
-
-    mapped = dict(params)
-    # Common parameter name translations
-    if "entity" in mapped and "entity_name" in sig.parameters and "entity_name" not in mapped:
-        mapped["entity_name"] = mapped.pop("entity")
-    if "agent" in mapped and "agent_name" in sig.parameters and "agent_name" not in mapped:
-        mapped["agent_name"] = mapped.pop("agent")
-    if "content" in mapped and "entry" in sig.parameters and "entry" not in mapped:
-        mapped["entry"] = mapped.pop("content")
-    if "source" in mapped and "source_file" in sig.parameters and "source_file" not in mapped:
-        mapped["source_file"] = mapped.pop("source")
-    if "source" in mapped and "source_wing" in sig.parameters and "source_wing" not in mapped:
-        mapped["source_wing"] = mapped.pop("source")
-    if "target" in mapped and "target_wing" in sig.parameters and "target_wing" not in mapped:
-        mapped["target_wing"] = mapped.pop("target")
-    if "project" in mapped and "project_dir" in sig.parameters and "project_dir" not in mapped:
-        mapped["project_dir"] = mapped.pop("project")
-
-    valid_kwargs = {k: v for k, v in mapped.items() if k in sig.parameters}
-    return handler(**valid_kwargs)
+    mapped = _alias_args_for_handler(handler, params)
+    return handler(**mapped)
 
 
 def _resolve_fuzzy_wing(wing: Optional[str]) -> Optional[str]:
@@ -558,7 +535,11 @@ LIGHT_TOOLS = {
                     "description": "Target wing for create_tunnel (optional)",
                 },
                 "valid_from": {"type": "string", "description": "KG fact start (optional)"},
-                "valid_to": {"type": "string", "description": "KG fact end (optional)"},
+                "valid_to": {
+                    "type": "string",
+                    "description": "KG fact end / invalidate ended (optional)",
+                },
+                "ended": {"type": "string", "description": "KG invalidate end date (optional)"},
                 "project": {
                     "type": "string",
                     "description": "Project directory for mine/sync (optional)",
@@ -686,8 +667,8 @@ _QUERY_TARGET_TO_TOOL = {
     "get_aaak_spec": "mempalace_get_aaak_spec",
     "taxonomy": "mempalace_get_taxonomy",
     "get_taxonomy": "mempalace_get_taxonomy",
-    "traverse": "mempalace_traverse_graph",
-    "traverse_graph": "mempalace_traverse_graph",
+    "traverse": "mempalace_traverse",
+    "traverse_graph": "mempalace_traverse",
     "list_hallways": "mempalace_list_hallways",
     "hallways": "mempalace_list_hallways",
     "graph_stats": "mempalace_graph_stats",
@@ -850,6 +831,8 @@ def _alias_args_for_handler(handler, params: Dict[str, Any]) -> Dict[str, Any]:
         mapped["target_wing"] = mapped.pop("target")
     if "project" in mapped and "project_dir" in names and "project_dir" not in mapped:
         mapped["project_dir"] = mapped.pop("project")
+    if "valid_to" in mapped and "ended" in names and "ended" not in mapped:
+        mapped["ended"] = mapped.pop("valid_to")
     has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in names.values())
     if has_var_keyword:
         return mapped
