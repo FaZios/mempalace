@@ -4008,11 +4008,23 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
 # ==================== KNOWLEDGE GRAPH ====================
 
 
-def _valid_from_has_started(valid_from, now_key: str) -> bool:
-    if not valid_from:
-        return True
-    start = valid_from if "T" in str(valid_from) else f"{valid_from}T00:00:00Z"
-    return str(start) <= now_key
+def _temporal_bound_key(value, *, end: bool = False) -> Optional[str]:
+    if not value:
+        return None
+    text = str(value)
+    if "T" in text:
+        return text
+    return f"{text}T23:59:59Z" if end else f"{text}T00:00:00Z"
+
+
+def _fact_interval_bucket(row: dict, now_key: str) -> str:
+    start_key = _temporal_bound_key(row.get("valid_from"), end=False)
+    end_key = _temporal_bound_key(row.get("valid_to"), end=True)
+    if start_key and start_key > now_key:
+        return "future"
+    if end_key and end_key < now_key:
+        return "historical"
+    return "active"
 
 
 def tool_kg_query(entity: str, as_of: str = None, direction: str = "both"):
@@ -4033,10 +4045,11 @@ def tool_kg_query(entity: str, as_of: str = None, direction: str = "both"):
         historical = []
         future = []
         for row in results:
-            if not row.get("current"):
-                historical.append(row)
-            elif not _valid_from_has_started(row.get("valid_from"), now_key):
+            bucket = _fact_interval_bucket(row, now_key)
+            if bucket == "future":
                 future.append(row)
+            elif bucket == "historical":
+                historical.append(row)
             else:
                 active.append(row)
     else:

@@ -4176,6 +4176,33 @@ class TestKGTools:
         assert "starts" not in active_preds
         assert "starts" in future_preds
 
+    def test_kg_query_keeps_bounded_future_end_as_active(
+        self, monkeypatch, config, palace_path, kg
+    ):
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace import mcp_server
+
+        kg.add_triple(
+            "Alice",
+            "on_med",
+            "Empagliflozin",
+            valid_from="2025-01-01",
+            valid_to="2099-12-31",
+        )
+        kg.add_triple(
+            "Alice",
+            "on_med",
+            "Metformin",
+            valid_from="2020-01-01",
+            valid_to="2025-01-01",
+        )
+        result = mcp_server.tool_kg_query("Alice", direction="outgoing")
+        active_objs = {r["object"] for r in result["active_facts"]}
+        historical_objs = {r["object"] for r in result["historical_facts"]}
+        assert "Empagliflozin" in active_objs
+        assert "Empagliflozin" not in historical_objs
+        assert "Metformin" in historical_objs
+
     def test_kg_invalidate_accepts_datetime_ended(self, monkeypatch, config, palace_path, kg):
         _patch_mcp_server(monkeypatch, config, kg)
 

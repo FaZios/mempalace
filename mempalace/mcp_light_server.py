@@ -870,9 +870,11 @@ def _rewrite_tools_call_for_hub(request: Dict[str, Any]):
         return {"_parse_error": True, "message": str(exc)}
 
     taxonomy_wing = None
-    if tool_name == "palace_query" and isinstance(parsed.get("wing"), str):
-        parsed["wing"] = _resolve_fuzzy_wing(parsed["wing"])
-        if query_target in ("taxonomy", "get_taxonomy"):
+    if tool_name in ("palace_query", "palace_exec"):
+        for key in ("wing", "source_wing", "target_wing"):
+            if isinstance(parsed.get(key), str):
+                parsed[key] = _resolve_fuzzy_wing(parsed[key])
+        if tool_name == "palace_query" and query_target in ("taxonomy", "get_taxonomy"):
             taxonomy_wing = parsed.get("wing")
 
     underlying = _classify_underlying_tool(tool_name, arguments)

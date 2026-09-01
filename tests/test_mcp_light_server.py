@@ -555,3 +555,37 @@ class TestHubDispatch:
         res = mcp_light_server.dispatch_light_stdio_request(req)
         payload = json.loads(res["result"]["content"][0]["text"])
         assert payload == {"taxonomy": {"backend": {"auth": 2}}}
+
+    def test_exec_add_resolves_unique_suffix_wing_before_forward(self, monkeypatch, config, kg):
+        _patch_light_server(monkeypatch, config, kg)
+        monkeypatch.setattr(mcp_server, "_hub_proxy_target", lambda: ("http://127.0.0.1:9", {}))
+        monkeypatch.setattr(
+            mcp_server,
+            "tool_list_wings",
+            lambda: {"wings": {"project_auth": 3, "oauth_notes": 1}},
+        )
+        captured = {}
+
+        def fake_forward(base_url, headers, request, palace_path):
+            captured["name"] = request["params"]["name"]
+            captured["arguments"] = request["params"]["arguments"]
+            return {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {"content": [{"type": "text", "text": "{}"}]},
+            }
+
+        monkeypatch.setattr(mcp_server, "_forward_request_to_hub", fake_forward)
+        req = {
+            "jsonrpc": "2.0",
+            "id": 93,
+            "method": "tools/call",
+            "params": {
+                "name": "palace_exec",
+                "arguments": 'ADD IN auth/room "verbatim words" SOURCE a.md',
+            },
+        }
+        mcp_light_server.dispatch_light_stdio_request(req)
+        assert captured["name"] == "mempalace_add_drawer"
+        assert captured["arguments"]["wing"] == "project_auth"
+        assert captured["arguments"]["room"] == "room"
