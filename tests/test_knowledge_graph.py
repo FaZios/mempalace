@@ -390,3 +390,25 @@ class TestSupersessionBoundary:
         assert self._models(kg, "2026-06-02") == ["A"]
         assert self._models(kg, "2026-06-02T23:00:00Z") == ["A"]
         assert self._models(kg, "2026-06-03") == []
+
+
+class TestCandidateResolution:
+    def test_exact_entity_existence_prevents_fuzzy_fallback(self, kg):
+        # Add Alice Smith with a relationship
+        kg.add_triple("Alice Smith", "works_at", "Acme")
+        # Add exact entity Alice with NO triples
+        kg.add_entity("Alice", entity_type="person")
+
+        # Querying exact entity "Alice" should return empty, NOT attribute Alice Smith's facts
+        res = kg.query_entity("Alice")
+        assert res == []
+
+    def test_nonexistent_entity_uses_candidate_fallback(self, kg):
+        # Add Alice Smith with a relationship
+        kg.add_triple("Alice Smith", "works_at", "Acme")
+
+        # Querying nonexistent entity "Smith" should resolve candidate Alice Smith
+        res = kg.query_entity("Smith")
+        assert len(res) >= 1
+        assert res[0]["subject"] == "Alice Smith"
+        assert res[0]["object"] == "Acme"

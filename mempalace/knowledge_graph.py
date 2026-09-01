@@ -552,54 +552,56 @@ class KnowledgeGraph:
                     )
 
             if not results:
-                # Substring / prefix entity resolution when exact ID is not found
-                candidate_rows = conn.execute(
-                    "SELECT id, name FROM entities WHERE id LIKE ? OR name LIKE ? LIMIT 5",
-                    (f"%{eid}%", f"%{name}%"),
-                ).fetchall()
-                for cand in candidate_rows:
-                    cand_id = cand["id"]
-                    cand_name = cand["name"]
-                    if cand_id == eid:
-                        continue
-                    if direction in ("outgoing", "both"):
-                        query = (
-                            "SELECT t.*, e.name as obj_name FROM triples t "
-                            "JOIN entities e ON t.object = e.id WHERE t.subject = ?" + temporal_sql
-                        )
-                        for row in conn.execute(query, [cand_id] + temporal_params).fetchall():
-                            results.append(
-                                {
-                                    "direction": "outgoing",
-                                    "subject": cand_name,
-                                    "predicate": row["predicate"],
-                                    "object": row["obj_name"],
-                                    "valid_from": row["valid_from"],
-                                    "valid_to": row["valid_to"],
-                                    "confidence": row["confidence"],
-                                    "source_closet": row["source_closet"],
-                                    "current": row["valid_to"] is None,
-                                }
+                # Substring / prefix entity resolution ONLY when exact entity does not exist in database
+                exact_exists = conn.execute("SELECT 1 FROM entities WHERE id = ?", (eid,)).fetchone() is not None
+                if not exact_exists:
+                    candidate_rows = conn.execute(
+                        "SELECT id, name FROM entities WHERE id LIKE ? OR name LIKE ? LIMIT 5",
+                        (f"%{eid}%", f"%{name}%"),
+                    ).fetchall()
+                    for cand in candidate_rows:
+                        cand_id = cand["id"]
+                        cand_name = cand["name"]
+                        if cand_id == eid:
+                            continue
+                        if direction in ("outgoing", "both"):
+                            query = (
+                                "SELECT t.*, e.name as obj_name FROM triples t "
+                                "JOIN entities e ON t.object = e.id WHERE t.subject = ?" + temporal_sql
                             )
-                    if direction in ("incoming", "both"):
-                        query = (
-                            "SELECT t.*, e.name as sub_name FROM triples t "
-                            "JOIN entities e ON t.subject = e.id WHERE t.object = ?" + temporal_sql
-                        )
-                        for row in conn.execute(query, [cand_id] + temporal_params).fetchall():
-                            results.append(
-                                {
-                                    "direction": "incoming",
-                                    "subject": row["sub_name"],
-                                    "predicate": row["predicate"],
-                                    "object": cand_name,
-                                    "valid_from": row["valid_from"],
-                                    "valid_to": row["valid_to"],
-                                    "confidence": row["confidence"],
-                                    "source_closet": row["source_closet"],
-                                    "current": row["valid_to"] is None,
-                                }
+                            for row in conn.execute(query, [cand_id] + temporal_params).fetchall():
+                                results.append(
+                                    {
+                                        "direction": "outgoing",
+                                        "subject": cand_name,
+                                        "predicate": row["predicate"],
+                                        "object": row["obj_name"],
+                                        "valid_from": row["valid_from"],
+                                        "valid_to": row["valid_to"],
+                                        "confidence": row["confidence"],
+                                        "source_closet": row["source_closet"],
+                                        "current": row["valid_to"] is None,
+                                    }
+                                )
+                        if direction in ("incoming", "both"):
+                            query = (
+                                "SELECT t.*, e.name as sub_name FROM triples t "
+                                "JOIN entities e ON t.subject = e.id WHERE t.object = ?" + temporal_sql
                             )
+                            for row in conn.execute(query, [cand_id] + temporal_params).fetchall():
+                                results.append(
+                                    {
+                                        "direction": "incoming",
+                                        "subject": row["sub_name"],
+                                        "predicate": row["predicate"],
+                                        "object": cand_name,
+                                        "valid_from": row["valid_from"],
+                                        "valid_to": row["valid_to"],
+                                        "confidence": row["confidence"],
+                                        "source_closet": row["source_closet"],
+                                        "current": row["valid_to"] is None,
+                                    }
+                                )
 
         return results
 

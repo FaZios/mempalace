@@ -93,6 +93,8 @@ def _call_handler_safe(handler, params: Dict[str, Any]) -> Dict[str, Any]:
         mapped["source_wing"] = mapped.pop("source")
     if "target" in mapped and "target_wing" in sig.parameters and "target_wing" not in mapped:
         mapped["target_wing"] = mapped.pop("target")
+    if "project" in mapped and "project_dir" in sig.parameters and "project_dir" not in mapped:
+        mapped["project_dir"] = mapped.pop("project")
 
     valid_kwargs = {k: v for k, v in mapped.items() if k in sig.parameters}
     return handler(**valid_kwargs)
@@ -158,21 +160,11 @@ def _enrich_search_results(res: Dict[str, Any]) -> Dict[str, Any]:
     top_room = top_item.get("room")
     if top_wing and top_room:
         try:
-            tunnels_resp = mcp_server.tool_find_tunnels(wing=top_wing, room=top_room)
-            tunnels = tunnels_resp.get("tunnels", []) if isinstance(tunnels_resp, dict) else []
-            if tunnels:
-                res["connected_tunnels"] = tunnels[:3]
-                first_tunnel = tunnels[0]
-                tgt_wing = first_tunnel.get("target_wing")
-                tgt_room = first_tunnel.get("target_room")
-                if tgt_wing and tgt_room:
-                    conn_drawers = mcp_server.tool_list_drawers(wing=tgt_wing, room=tgt_room, limit=1)
-                    if isinstance(conn_drawers, dict) and "drawers" in conn_drawers and conn_drawers["drawers"]:
-                        res["connected_room_context"] = {
-                            "room": f"{tgt_wing}/{tgt_room}",
-                            "tunnel_label": first_tunnel.get("label", ""),
-                            "drawer": conn_drawers["drawers"][0],
-                        }
+            tunnel_res = mcp_server.tool_follow_tunnels(top_wing, top_room)
+            if isinstance(tunnel_res, dict) and "connections" in tunnel_res and tunnel_res["connections"]:
+                res["connected_tunnels"] = tunnel_res["connections"][:3]
+                if "drawers" in tunnel_res and tunnel_res["drawers"]:
+                    res["connected_room_context"] = tunnel_res["drawers"][:2]
         except Exception:
             pass
 
@@ -203,44 +195,44 @@ def tool_palace_query(arguments: Dict[str, Any] | str) -> Dict[str, Any]:
             tax = res["taxonomy"]
             return {"taxonomy": {wing: tax.get(wing, {})}} if wing in tax else {"taxonomy": {}}
         return res
-    elif target == "wings":
+    elif target in ("wings", "list_wings"):
         return mcp_server.tool_list_wings()
-    elif target == "rooms":
+    elif target in ("rooms", "list_rooms"):
         return _call_handler_safe(mcp_server.tool_list_rooms, params)
-    elif target == "drawer":
+    elif target in ("drawer", "get_drawer"):
         return _call_handler_safe(mcp_server.tool_get_drawer, params)
-    elif target == "drawers":
+    elif target in ("drawers", "list_drawers"):
         return _call_handler_safe(mcp_server.tool_list_drawers, params)
-    elif target == "check_duplicate":
+    elif target in ("check_duplicate", "duplicate", "check"):
         return _call_handler_safe(mcp_server.tool_check_duplicate, params)
-    elif target == "aaak_spec":
+    elif target in ("aaak_spec", "aaak", "get_aaak_spec"):
         return mcp_server.tool_get_aaak_spec()
-    elif target == "kg_query":
+    elif target in ("kg_query", "kg"):
         return _call_handler_safe(mcp_server.tool_kg_query, params)
-    elif target == "kg_timeline":
+    elif target in ("kg_timeline", "timeline"):
         return _call_handler_safe(mcp_server.tool_kg_timeline, params)
-    elif target == "kg_stats":
+    elif target in ("kg_stats", "kg_statistics"):
         return mcp_server.tool_kg_stats()
-    elif target == "traverse":
+    elif target in ("traverse", "traverse_graph"):
         return _call_handler_safe(mcp_server.tool_traverse_graph, params)
-    elif target == "find_tunnels":
+    elif target in ("find_tunnels",):
         return _call_handler_safe(mcp_server.tool_find_tunnels, params)
-    elif target == "list_tunnels":
+    elif target in ("list_tunnels", "tunnels"):
         return _call_handler_safe(mcp_server.tool_list_tunnels, params)
-    elif target == "follow_tunnels":
+    elif target in ("follow_tunnels", "follow"):
         return _call_handler_safe(mcp_server.tool_follow_tunnels, params)
-    elif target == "list_hallways":
+    elif target in ("list_hallways", "hallways"):
         return _call_handler_safe(mcp_server.tool_list_hallways, params)
-    elif target == "graph_stats":
+    elif target in ("graph_stats", "stats"):
         return mcp_server.tool_graph_stats()
-    elif target == "diary_read":
+    elif target in ("diary_read", "diary"):
         return _call_handler_safe(mcp_server.tool_diary_read, params)
-    elif target == "status":
+    elif target in ("status",):
         res = mcp_server.tool_status()
         return mcp_server._decorate_mcp_tool_result("mempalace_status", res)
-    elif target == "filed":
+    elif target in ("filed", "memories_filed_away"):
         return mcp_server.tool_memories_filed_away()
-    elif target == "settings":
+    elif target in ("settings", "hook_settings"):
         return mcp_server.tool_hook_settings()
     else:
         return {"success": False, "error": f"Unknown palace_query target: '{target}'"}
@@ -466,9 +458,77 @@ LIGHT_TOOLS = {
 # ==================== JSON-RPC REQUEST HANDLING ====================
 
 
-def handle_light_request(request: Dict[str, Any]) -> Dict[str, Any] | None:
-    """Handle one JSON-RPC request using the lightweight 3-tool interface."""
-    if not isinstance(request, dict):
+def _restore_stdout():
+    """Restore stdout descriptor for the JSON-RPC stdio transport."""
+    global _REAL_STDOUT_FD
+    if _REAL_STDOUT_FD is not None:
+        try:
+            os.dup2(_REAL_STDOUT_FD, 1)
+            os.close(_REAL_STDOUT_FD)
+            _REAL_STDOUT_FD = None
+        except OSError:
+            pass
+    sys.stdout = _REAL_STDOUT
+
+
+def _classify_underlying_tool(tool_name: str, arguments: Any) -> str:
+    """Map a consolidated lightweight tool call to its underlying legacy tool name for preflight gates."""
+    unwrapped = _unwrap_wrapper_input(arguments)
+    if tool_name == "palace_exec":
+        try:
+            action, _ = parse_exec_input(unwrapped)
+            return f"mempalace_{action}"
+        except Exception:
+            return "mempalace_add_drawer"  # Conservatively treat as mutating write
+
+    elif tool_name == "palace_coordinate":
+        try:
+            action, _ = parse_coordinate_input(unwrapped)
+            if action in ("task_create", "event_append", "event_ack", "artifact_put", "patch_submit"):
+                return f"mempalace_{action}"
+            elif action == "event_list":
+                return "mempalace_event_list"
+            elif action == "mesh_peers":
+                return "mempalace_mesh_peers"
+            elif action == "event_wait":
+                return "mempalace_event_wait"
+            elif action == "artifact_get":
+                return "mempalace_artifact_get"
+            return f"mempalace_{action}"
+        except Exception:
+            return "mempalace_event_append"  # Conservatively treat as coordination write
+
+    elif tool_name == "palace_query":
+        try:
+            target, _ = parse_query_input(unwrapped)
+            if target in ("search", "find"):
+                return "mempalace_search"
+            elif target in ("kg_query", "kg"):
+                return "mempalace_kg_query"
+            elif target in ("kg_timeline", "timeline"):
+                return "mempalace_kg_timeline"
+            elif target in ("kg_stats",):
+                return "mempalace_kg_stats"
+            elif target in ("rooms", "list_rooms"):
+                return "mempalace_list_rooms"
+            elif target in ("wings", "list_wings"):
+                return "mempalace_list_wings"
+            elif target in ("drawers", "list_drawers"):
+                return "mempalace_list_drawers"
+            elif target in ("drawer", "get_drawer"):
+                return "mempalace_get_drawer"
+            elif target in ("status",):
+                return "mempalace_status"
+            return f"mempalace_{target}"
+        except Exception:
+            return "mempalace_search"
+
+    return tool_name
+
+
+def handle_light_request(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Process a single JSON-RPC request for the lightweight MCP server."""
+    if not isinstance(request, dict) or request.get("jsonrpc") != "2.0":
         return {
             "jsonrpc": "2.0",
             "id": None,
@@ -500,7 +560,7 @@ def handle_light_request(request: Dict[str, Any]) -> Dict[str, Any] | None:
     elif method.startswith("notifications/"):
         return None
     elif method == "tools/list":
-        # In read-only mode, only palace_query is exposed if desired, or all tools are available with write refusals
+        # In read-only mode, only palace_query is exposed
         tools_list = []
         for name, tool_def in LIGHT_TOOLS.items():
             if mcp_server._READ_ONLY and name in ("palace_exec", "palace_coordinate"):
@@ -535,8 +595,9 @@ def handle_light_request(request: Dict[str, Any]) -> Dict[str, Any] | None:
 
         arguments = params.get("arguments") or {}
 
-        # Preflight gate checks
-        refusal = mcp_server._mcp_tool_preflight_refusal(req_id, tool_name)
+        # Classify underlying tool for preflight gates (read-only, peer-writer, stale-library, diverged-index)
+        underlying_name = _classify_underlying_tool(tool_name, arguments)
+        refusal = mcp_server._mcp_tool_preflight_refusal(req_id, underlying_name)
         if refusal is not None:
             return refusal
 
@@ -582,7 +643,7 @@ def main():
         mcp_server._READ_ONLY = True
 
     # Run stdio protocol loop with lightweight dispatcher
-    mcp_server._restore_stdout()
+    _restore_stdout()
     logger.info("MemPalace Lightweight MCP Server starting (3 consolidated tools)...")
 
     while True:

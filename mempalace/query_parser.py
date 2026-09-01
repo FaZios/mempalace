@@ -239,7 +239,7 @@ def parse_query_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
             if k in params and isinstance(params[k], str):
                 v_strip = params[k].strip()
                 first_w = v_strip.split(None, 1)[0].upper() if v_strip else ""
-                if first_w in ("FIND", "SEARCH", "TAXONOMY", "WINGS", "ROOMS", "DRAWER", "CHECK", "KG", "TRAVERSE", "TUNNELS", "TUNNEL", "HALLWAYS", "HALLWAY", "GRAPH", "DIARY", "STATUS"):
+                if first_w in ("FIND", "SEARCH", "TAXONOMY", "WINGS", "ROOMS", "DRAWER", "DRAWERS", "CHECK", "AAAK", "KG", "TRAVERSE", "TUNNELS", "TUNNEL", "FOLLOW", "HALLWAYS", "HALLWAY", "GRAPH", "DIARY", "STATUS", "FILED", "SETTINGS"):
                     op, parsed_p = parse_query_input(v_strip)
                     for pk, pv in params.items():
                         if pk not in (k, "target", "action") and pk not in parsed_p:
@@ -278,19 +278,19 @@ def parse_query_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
         elif t_lower in ("list_tunnels", "tunnels", "find_tunnels"):
             target = "list_tunnels"
         elif t_lower in ("list_drawers", "drawers"):
-            target = "list_drawers"
+            target = "drawers"
         elif t_lower in ("list_hallways", "hallways"):
             target = "list_hallways"
         elif t_lower in ("list_wings", "wings"):
             target = "wings"
         elif t_lower in ("list_rooms", "rooms"):
-            target = "list_rooms"
+            target = "rooms"
         elif t_lower in ("taxonomy", "get_taxonomy"):
             target = "taxonomy"
         elif t_lower in ("kg_stats", "kg_statistics"):
             target = "kg_stats"
         elif t_lower in ("graph_stats", "stats"):
-            target = "stats"
+            target = "graph_stats"
         else:
             target = t_lower
 

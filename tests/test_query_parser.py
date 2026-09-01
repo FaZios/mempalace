@@ -309,3 +309,16 @@ class TestPalaceCoordinateParser:
     def test_mesh_peers(self):
         assert parse_coordinate_input("MESH PEERS")[0] == "mesh_peers"
         assert parse_coordinate_input("PEERS")[0] == "mesh_peers"
+
+    def test_structured_dict_with_embedded_dsl_keywords(self):
+        for kw in ["DRAWERS IN backend/auth", "FOLLOW backend/auth", "FILED", "SETTINGS", "AAAK SPEC"]:
+            target, params = parse_query_input({"query": kw})
+            assert target in ("drawers", "follow_tunnels", "filed", "settings", "aaak_spec")
+
+    def test_structured_target_aliases(self):
+        assert parse_query_input({"target": "rooms", "wing": "core"}) == ("rooms", {"wing": "core"})
+        assert parse_query_input({"target": "drawers", "wing": "core"}) == ("drawers", {"wing": "core"})
+        assert parse_query_input({"target": "graph_stats"}) == ("graph_stats", {})
+        assert parse_query_input({"target": "kg_stats"}) == ("kg_stats", {})
+        assert parse_query_input({"target": "list_tunnels", "wing": "core"}) == ("list_tunnels", {"wing": "core"})
+        assert parse_query_input({"target": "list_hallways"}) == ("list_hallways", {})

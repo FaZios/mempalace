@@ -269,3 +269,47 @@ class TestPalaceCoordinate:
         get_res = mcp_light_server.handle_light_request(get_req)
         get_payload = json.loads(get_res["result"]["content"][0]["text"])
         assert get_payload["artifact"]["content"] == "Architecture decision record: PQL 3-tool triad"
+
+
+class TestLightMcpPreflightAndGates:
+    def test_read_only_blocks_palace_exec_direct_call(self, monkeypatch, config, kg):
+        _patch_light_server(monkeypatch, config, kg)
+        monkeypatch.setattr(mcp_server, "_READ_ONLY", True)
+        req = {
+            "jsonrpc": "2.0",
+            "id": 70,
+            "method": "tools/call",
+            "params": {
+                "name": "palace_exec",
+                "arguments": 'ADD IN test_wing/test_room "content" SOURCE test.md',
+            },
+        }
+        res = mcp_light_server.handle_light_request(req)
+        assert res["id"] == 70
+        assert "error" in res
+        assert res["error"]["code"] == -32003
+        assert "read-only mode" in res["error"]["message"].lower()
+
+    def test_sync_project_dir_translation(self, monkeypatch, config, kg):
+        _patch_light_server(monkeypatch, config, kg)
+        called_args = {}
+
+        def mock_tool_sync(project_dir=None, dry_run=True, apply=False):
+            called_args["project_dir"] = project_dir
+            called_args["apply"] = apply
+            return {"synced": True}
+
+        monkeypatch.setattr(mcp_server, "tool_sync", mock_tool_sync)
+        req = {
+            "jsonrpc": "2.0",
+            "id": 71,
+            "method": "tools/call",
+            "params": {
+                "name": "palace_exec",
+                "arguments": "SYNC PROJECT /custom/repo APPLY",
+            },
+        }
+        res = mcp_light_server.handle_light_request(req)
+        assert res["id"] == 71
+        assert called_args["project_dir"] == "/custom/repo"
+        assert called_args["apply"] is True
