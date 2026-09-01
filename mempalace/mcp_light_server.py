@@ -636,6 +636,10 @@ def _restore_stdout():
         except OSError:
             pass
     sys.stdout = _REAL_STDOUT
+    # mcp_server dup'd fd 1 after we had already redirected it to stderr.
+    # Keep it from later restoring that captured stderr onto protocol stdout.
+    mcp_server._REAL_STDOUT = sys.stdout
+    mcp_server._REAL_STDOUT_FD = None
 
 
 _QUERY_TARGET_TO_TOOL = {
@@ -816,17 +820,141 @@ def handle_light_request(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+def _alias_args_for_handler(handler, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate PQL field names to the underlying handler's parameter names."""
+    mapped = dict(params)
+    try:
+        sig = inspect.signature(handler)
+    except (TypeError, ValueError):
+        return mapped
+    names = sig.parameters
+    if "entity" in mapped and "entity_name" in names and "entity_name" not in mapped:
+        mapped["entity_name"] = mapped.pop("entity")
+    if "agent" in mapped and "agent_name" in names and "agent_name" not in mapped:
+        mapped["agent_name"] = mapped.pop("agent")
+    if "content" in mapped and "entry" in names and "entry" not in mapped:
+        mapped["entry"] = mapped.pop("content")
+    if "source" in mapped and "source_file" in names and "source_file" not in mapped:
+        mapped["source_file"] = mapped.pop("source")
+    if "source" in mapped and "source_wing" in names and "source_wing" not in mapped:
+        mapped["source_wing"] = mapped.pop("source")
+    if "target" in mapped and "target_wing" in names and "target_wing" not in mapped:
+        mapped["target_wing"] = mapped.pop("target")
+    if "project" in mapped and "project_dir" in names and "project_dir" not in mapped:
+        mapped["project_dir"] = mapped.pop("project")
+    has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in names.values())
+    if has_var_keyword:
+        return mapped
+    return {k: v for k, v in mapped.items() if k in names}
+
+
+def _rewrite_tools_call_for_hub(request: Dict[str, Any]):
+    """Translate palace_* tools/call into the underlying mempalace_* JSON-RPC."""
+    params = request.get("params") or {}
+    if not isinstance(params, dict) or "name" not in params:
+        return None
+    tool_name = params["name"]
+    if tool_name not in LIGHT_TOOLS:
+        return None
+    arguments = params.get("arguments") or {}
+    unwrapped = _unwrap_wrapper_input(arguments)
+    try:
+        if tool_name == "palace_query":
+            _, parsed = parse_query_input(unwrapped)
+        elif tool_name == "palace_exec":
+            _, parsed = parse_exec_input(unwrapped)
+        else:
+            _, parsed = parse_coordinate_input(unwrapped)
+    except QueryParseError as exc:
+        return {"_parse_error": True, "message": str(exc)}
+
+    if tool_name == "palace_query" and isinstance(parsed.get("wing"), str):
+        parsed["wing"] = _resolve_fuzzy_wing(parsed["wing"])
+
+    underlying = _classify_underlying_tool(tool_name, arguments)
+    tool_def = mcp_server.TOOLS.get(underlying) or {}
+    handler = tool_def.get("handler")
+    if handler is not None:
+        parsed = _alias_args_for_handler(handler, parsed)
+    return {
+        "jsonrpc": request.get("jsonrpc", "2.0"),
+        "id": request.get("id"),
+        "method": "tools/call",
+        "params": {"name": underlying, "arguments": parsed},
+        "_light_tool": tool_name,
+    }
+
+
+def _postprocess_light_response(rewritten: Dict[str, Any], resp: Optional[Dict[str, Any]]):
+    if not resp or "result" not in resp:
+        return resp
+    underlying = ((rewritten.get("params") or {}).get("name")) or ""
+    if underlying != "mempalace_search":
+        return resp
+    content = (resp.get("result") or {}).get("content") or []
+    if not content or not isinstance(content[0], dict):
+        return resp
+    raw = content[0].get("text")
+    if not isinstance(raw, str):
+        return resp
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return resp
+    if not isinstance(payload, dict):
+        return resp
+    enriched = _enrich_search_results(payload)
+    content[0]["text"] = json.dumps(enriched, ensure_ascii=False, indent=2)
+    return resp
+
+
+def dispatch_light_stdio_request(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Hub-first stdio dispatch: translate palace_* calls, keep the 3-tool handshake local."""
+    method = request.get("method") if isinstance(request, dict) else None
+    if method == "tools/call":
+        rewritten = _rewrite_tools_call_for_hub(request)
+        if isinstance(rewritten, dict) and rewritten.get("_parse_error"):
+            req_id = request.get("id")
+            payload = {"success": False, "error": f"PQL parse error: {rewritten['message']}"}
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(payload, ensure_ascii=False, indent=2),
+                        }
+                    ]
+                },
+            }
+        if rewritten is not None:
+            forwarded = {k: v for k, v in rewritten.items() if not k.startswith("_")}
+            resp = mcp_server._dispatch_stdio_request(forwarded)
+            return _postprocess_light_response(rewritten, resp)
+    return handle_light_request(request)
+
+
 def main():
     parser = argparse.ArgumentParser(description="MemPalace Lightweight MCP Server")
     parser.add_argument("--palace", help="Path to palace directory")
     parser.add_argument("--collection", help="Chroma collection name")
+    parser.add_argument(
+        "--backend",
+        help="Storage backend to use (default: config/env/detected/chroma)",
+    )
     parser.add_argument("--read-only", action="store_true", help="Run in read-only mode")
     args = parser.parse_args()
 
     if args.palace:
         mcp_server._config.palace_path = args.palace
+        os.environ["MEMPALACE_PALACE_PATH"] = os.path.abspath(args.palace)
     if args.collection:
         mcp_server._config.collection_name = args.collection
+    if args.backend:
+        backend_name = str(args.backend).strip().lower()
+        os.environ["MEMPALACE_BACKEND_EXPLICIT"] = backend_name
+        os.environ["MEMPALACE_BACKEND"] = backend_name
     if args.read_only:
         mcp_server._READ_ONLY = True
 
@@ -861,7 +989,7 @@ def main():
             req = json.loads(line)
         except json.JSONDecodeError:
             continue
-        resp = handle_light_request(req)
+        resp = dispatch_light_stdio_request(req)
         if resp is not None:
             try:
                 sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")

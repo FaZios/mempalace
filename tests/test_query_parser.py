@@ -167,6 +167,17 @@ class TestPalaceExecParser:
         assert target == "delete_by_source"
         assert params == {"source_file": "/path/to/file", "dry_run": False}
 
+        target, params = parse_exec_input("UPDATE drw_1 CONTENT NASA")
+        assert target == "update_drawer"
+        assert params["drawer_id"] == "drw_1"
+        assert params["content"] == "NASA"
+
+    def test_structured_drawer_id_plus_content_is_update(self):
+        action, params = parse_exec_input({"drawer_id": "drw_1", "content": "replacement"})
+        assert action == "update_drawer"
+        assert params["drawer_id"] == "drw_1"
+        assert params["content"] == "replacement"
+
     def test_mine_and_sync(self):
         target, params = parse_exec_input("MINE /path/to/repo MODE projects WING core LIMIT 100")
         assert target == "mine"
@@ -216,6 +227,14 @@ class TestPalaceExecParser:
             "new_object": "7",
             "at": "2026-09-01",
         }
+
+        target, params = parse_exec_input("KG ADD Alice -> website -> https://example.com")
+        assert target == "kg_add"
+        assert params["object"] == "https://example.com"
+
+        target, params = parse_exec_input('KG ADD Alice -> note -> "status: active"')
+        assert target == "kg_add"
+        assert params["object"] == "status: active"
 
     def test_tunnel_create_and_delete(self):
         target, params = parse_exec_input(

@@ -983,6 +983,7 @@ def test_mcp_command_uses_custom_palace_path_when_provided(monkeypatch, capsys):
     assert expanded in captured.out
     assert "claude mcp add mempalace -- mempalace-mcp --palace" in captured.out
     assert "codex mcp add mempalace -- mempalace-mcp --palace" in captured.out
+    assert "claude mcp add mempalace-light -- mempalace-light-mcp --palace" in captured.out
     assert "Optional custom palace:" not in captured.out
     assert "[--palace /path/to/palace]" not in captured.out
     assert captured.err == ""
@@ -997,6 +998,7 @@ def test_mcp_command_includes_backend_when_provided(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert "mempalace-mcp --backend sqlite_exact" in captured.out
+    assert "mempalace-light-mcp --backend sqlite_exact" in captured.out
     assert captured.err == ""
     os.environ.pop("MEMPALACE_BACKEND_EXPLICIT", None)
     os.environ.pop("MEMPALACE_BACKEND", None)

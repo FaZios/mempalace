@@ -17,6 +17,9 @@ class QueryParseError(ValueError):
 
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}([T ].*)?$")
+_BARE_FLAGS = frozenset({"APPLY", "COMMIT", "PREVIEW", "DRY_RUN"})
+_KG_ADD_FLAGS = frozenset({"FROM", "TO", "VALID_FROM", "VALID_TO", "CLOSET", "DRAWER"})
+_KG_INVALIDATE_FLAGS = frozenset({"ENDED", "AT", "DATE"})
 
 
 def tokenize_dsl(text: str) -> List[str]:
@@ -143,15 +146,16 @@ def _parse_key_value_tokens(tokens: List[str]) -> Dict[str, Any]:
             i += 3
             continue
 
-        # Case 4: tok is key keyword, next is value
-        # E.g. LIMIT 5, SINCE 2026-01-01
-        if i + 1 < n and tok.isupper() and not tokens[i + 1].isupper() and tokens[i + 1] != ":":
-            k = tok.lower().strip()
-            v = tokens[i + 1]
-            if k:
-                result[k] = _parse_val(v)
-            i += 2
-            continue
+        # Case 4: tok is key keyword, next is value (including uppercase values
+        # like CONTENT NASA). Bare flags never consume the following token.
+        if i + 1 < n and tok.isupper() and tokens[i + 1] != ":":
+            nxt = tokens[i + 1]
+            if nxt.upper() not in _BARE_FLAGS:
+                k = tok.lower().strip()
+                if k:
+                    result[k] = _parse_val(nxt)
+                i += 2
+                continue
 
         # Standalone flag (e.g. APPLY, COMMIT, PREVIEW, DRY_RUN)
         if tok.isupper() and tok not in ("->", "=>", ":"):
@@ -187,6 +191,29 @@ def _parse_val(val: str) -> Any:
             pass
 
     return val
+
+
+def _is_known_flag_token(tok: str, flag_keys: frozenset) -> bool:
+    """True when tok starts option flags, not when it merely contains a colon."""
+    if tok.upper() in flag_keys:
+        return True
+    if ":" not in tok or tok.startswith("http://") or tok.startswith("https://"):
+        return False
+    return tok.split(":", 1)[0].upper() in flag_keys
+
+
+def _split_object_and_flags(tokens: List[str], flag_keys: frozenset) -> Tuple[List[str], List[str]]:
+    obj_tokens: List[str] = []
+    flag_tokens: List[str] = []
+    in_flags = False
+    for tok in tokens:
+        if not in_flags and _is_known_flag_token(tok, flag_keys):
+            in_flags = True
+        if in_flags:
+            flag_tokens.append(tok)
+        else:
+            obj_tokens.append(tok)
+    return obj_tokens, flag_tokens
 
 
 # ==============================================================================
@@ -614,10 +641,16 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # noqa: C9
 
         action = params.pop("action", None) or params.pop("target", None)
         if not action:
-            if "content" in params or "document" in params:
-                action = "add_drawer"
-            elif "drawer_id" in params and ("content" in params or "wing" in params):
+            if "drawer_id" in params and (
+                "content" in params
+                or "document" in params
+                or "text" in params
+                or "wing" in params
+                or "room" in params
+            ):
                 action = "update_drawer"
+            elif "content" in params or "document" in params:
+                action = "add_drawer"
             elif "drawer_id" in params:
                 action = "delete_drawer"
             elif "subject" in params and "predicate" in params and "old_object" in params:
@@ -820,20 +853,7 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # noqa: C9
                     "KG ADD requires 'subject -> predicate -> object' or 'subject predicate object'"
                 )
 
-            obj_tokens = []
-            flag_tokens = []
-            in_flags = False
-            for t in obj_and_flags:
-                if (
-                    t.upper() in ("FROM", "TO", "VALID_FROM", "VALID_TO", "CLOSET", "DRAWER")
-                    or ":" in t
-                ):
-                    in_flags = True
-                if in_flags:
-                    flag_tokens.append(t)
-                else:
-                    obj_tokens.append(t)
-
+            obj_tokens, flag_tokens = _split_object_and_flags(obj_and_flags, _KG_ADD_FLAGS)
             obj = " ".join(obj_tokens)
             kv = _parse_key_value_tokens(flag_tokens)
             params = {"subject": subject, "predicate": predicate, "object": obj}
@@ -868,16 +888,7 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # noqa: C9
                     "KG INVALIDATE requires 'subject -> predicate -> object' or 'subject predicate object'"
                 )
 
-            obj_tokens = []
-            flag_tokens = []
-            in_flags = False
-            for t in obj_and_flags:
-                if t.upper() in ("ENDED", "AT", "DATE") or ":" in t:
-                    in_flags = True
-                if in_flags:
-                    flag_tokens.append(t)
-                else:
-                    obj_tokens.append(t)
+            obj_tokens, flag_tokens = _split_object_and_flags(obj_and_flags, _KG_INVALIDATE_FLAGS)
             obj = " ".join(obj_tokens)
             kv = _parse_key_value_tokens(flag_tokens)
             params = {"subject": subject, "predicate": predicate, "object": obj}

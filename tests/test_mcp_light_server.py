@@ -467,3 +467,66 @@ class TestFuzzyWing:
             lambda: {"wings": {"oauth_notes": 1}},
         )
         assert mcp_light_server._resolve_fuzzy_wing("auth") == "auth"
+
+
+class TestHubDispatch:
+    def test_tools_call_rewrites_add_and_forwards_to_hub(self, monkeypatch, config, kg):
+        _patch_light_server(monkeypatch, config, kg)
+        captured = {}
+
+        monkeypatch.setattr(mcp_server, "_hub_proxy_target", lambda: ("http://127.0.0.1:9", {}))
+
+        def fake_forward(base_url, headers, request, palace_path):
+            captured["name"] = request["params"]["name"]
+            captured["arguments"] = request["params"]["arguments"]
+            return {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {"content": [{"type": "text", "text": json.dumps({"ok": True})}]},
+            }
+
+        monkeypatch.setattr(mcp_server, "_forward_request_to_hub", fake_forward)
+        req = {
+            "jsonrpc": "2.0",
+            "id": 90,
+            "method": "tools/call",
+            "params": {
+                "name": "palace_exec",
+                "arguments": 'ADD IN test_wing/test_room "verbatim" SOURCE a.md',
+            },
+        }
+        res = mcp_light_server.dispatch_light_stdio_request(req)
+        assert res["id"] == 90
+        assert captured["name"] == "mempalace_add_drawer"
+        assert captured["arguments"]["wing"] == "test_wing"
+        assert captured["arguments"]["content"] == "verbatim"
+
+    def test_tools_call_maps_sync_project_to_project_dir(self, monkeypatch, config, kg):
+        _patch_light_server(monkeypatch, config, kg)
+        captured = {}
+        monkeypatch.setattr(mcp_server, "_hub_proxy_target", lambda: ("http://127.0.0.1:9", {}))
+
+        def fake_forward(base_url, headers, request, palace_path):
+            captured["name"] = request["params"]["name"]
+            captured["arguments"] = request["params"]["arguments"]
+            return {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {"content": [{"type": "text", "text": "{}"}]},
+            }
+
+        monkeypatch.setattr(mcp_server, "_forward_request_to_hub", fake_forward)
+        req = {
+            "jsonrpc": "2.0",
+            "id": 91,
+            "method": "tools/call",
+            "params": {
+                "name": "palace_exec",
+                "arguments": "SYNC PROJECT /custom/repo APPLY",
+            },
+        }
+        mcp_light_server.dispatch_light_stdio_request(req)
+        assert captured["name"] == "mempalace_sync"
+        assert captured["arguments"]["project_dir"] == "/custom/repo"
+        assert captured["arguments"].get("apply") is True
+        assert "project" not in captured["arguments"]
