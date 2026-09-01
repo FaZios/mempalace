@@ -858,9 +858,10 @@ def _rewrite_tools_call_for_hub(request: Dict[str, Any]):
         return None
     arguments = params.get("arguments") or {}
     unwrapped = _unwrap_wrapper_input(arguments)
+    query_target = None
     try:
         if tool_name == "palace_query":
-            _, parsed = parse_query_input(unwrapped)
+            query_target, parsed = parse_query_input(unwrapped)
         elif tool_name == "palace_exec":
             _, parsed = parse_exec_input(unwrapped)
         else:
@@ -868,8 +869,11 @@ def _rewrite_tools_call_for_hub(request: Dict[str, Any]):
     except QueryParseError as exc:
         return {"_parse_error": True, "message": str(exc)}
 
+    taxonomy_wing = None
     if tool_name == "palace_query" and isinstance(parsed.get("wing"), str):
         parsed["wing"] = _resolve_fuzzy_wing(parsed["wing"])
+        if query_target in ("taxonomy", "get_taxonomy"):
+            taxonomy_wing = parsed.get("wing")
 
     underlying = _classify_underlying_tool(tool_name, arguments)
     tool_def = mcp_server.TOOLS.get(underlying) or {}
@@ -882,14 +886,25 @@ def _rewrite_tools_call_for_hub(request: Dict[str, Any]):
         "method": "tools/call",
         "params": {"name": underlying, "arguments": parsed},
         "_light_tool": tool_name,
+        "_taxonomy_wing": taxonomy_wing,
     }
+
+
+def _filter_taxonomy_payload(payload: Dict[str, Any], wing: str) -> Dict[str, Any]:
+    tax = payload.get("taxonomy") if isinstance(payload.get("taxonomy"), dict) else {}
+    if wing in tax:
+        return {"taxonomy": {wing: tax.get(wing, {})}}
+    return {"taxonomy": {}}
 
 
 def _postprocess_light_response(rewritten: Dict[str, Any], resp: Optional[Dict[str, Any]]):
     if not resp or "result" not in resp:
         return resp
     underlying = ((rewritten.get("params") or {}).get("name")) or ""
-    if underlying != "mempalace_search":
+    taxonomy_wing = rewritten.get("_taxonomy_wing")
+    if underlying not in ("mempalace_search", "mempalace_get_taxonomy"):
+        return resp
+    if underlying == "mempalace_get_taxonomy" and not taxonomy_wing:
         return resp
     content = (resp.get("result") or {}).get("content") or []
     if not content or not isinstance(content[0], dict):
@@ -903,8 +918,11 @@ def _postprocess_light_response(rewritten: Dict[str, Any], resp: Optional[Dict[s
         return resp
     if not isinstance(payload, dict):
         return resp
-    enriched = _enrich_search_results(payload)
-    content[0]["text"] = json.dumps(enriched, ensure_ascii=False, indent=2)
+    if underlying == "mempalace_search":
+        payload = _enrich_search_results(payload)
+    elif underlying == "mempalace_get_taxonomy":
+        payload = _filter_taxonomy_payload(payload, taxonomy_wing)
+    content[0]["text"] = json.dumps(payload, ensure_ascii=False, indent=2)
     return resp
 
 

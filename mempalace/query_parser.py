@@ -20,6 +20,7 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}([T ].*)?$")
 _BARE_FLAGS = frozenset({"APPLY", "COMMIT", "PREVIEW", "DRY_RUN"})
 _KG_ADD_FLAGS = frozenset({"FROM", "TO", "VALID_FROM", "VALID_TO", "CLOSET", "DRAWER"})
 _KG_INVALIDATE_FLAGS = frozenset({"ENDED", "AT", "DATE"})
+_KG_SUPERSEDE_FLAGS = frozenset({"AT", "DATE"})
 
 
 def tokenize_dsl(text: str) -> List[str]:
@@ -429,16 +430,26 @@ def parse_query_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # noqa: C
         if len(tokens) > 1 and tokens[1].upper() == "STATS":
             return "kg_stats", {}
         if len(tokens) > 1 and tokens[1].upper() == "TIMELINE":
-            entity = tokens[2] if len(tokens) > 2 else None
+            entity = " ".join(tokens[2:]) if len(tokens) > 2 else None
             return "kg_timeline", {"entity": entity} if entity else {}
 
         # KG <entity> [AS OF <date>] [DIRECTION <dir>]
         if len(tokens) < 2:
             raise QueryParseError("KG query requires an entity name (e.g. 'KG Max')")
-        entity = tokens[1]
-        params = {"entity": entity}
-        i = 2
+        entity_tokens = []
+        i = 1
         n = len(tokens)
+        while i < n:
+            tok_u = tokens[i].upper()
+            if tok_u == "AS" and i + 1 < n and tokens[i + 1].upper() == "OF":
+                break
+            if tok_u in ("AS_OF", "DIRECTION"):
+                break
+            entity_tokens.append(tokens[i])
+            i += 1
+        if not entity_tokens:
+            raise QueryParseError("KG query requires an entity name (e.g. 'KG Max')")
+        params = {"entity": " ".join(entity_tokens)}
         while i < n:
             tok = tokens[i].upper()
             if tok == "AS" and i + 2 < n and tokens[i + 1].upper() == "OF":
@@ -1060,17 +1071,7 @@ def _parse_kg_supersede_tokens(tokens: List[str]) -> Dict[str, Any]:
         predicate = before_arrow[1]
         old_val = " ".join(before_arrow[2:])
 
-    new_val_tokens = []
-    flag_tokens = []
-    in_flags = False
-    for t in after_arrow:
-        if t.upper() in ("AT", "DATE") or ":" in t:
-            in_flags = True
-        if in_flags:
-            flag_tokens.append(t)
-        else:
-            new_val_tokens.append(t)
-
+    new_val_tokens, flag_tokens = _split_object_and_flags(after_arrow, _KG_SUPERSEDE_FLAGS)
     new_val = " ".join(new_val_tokens)
     kv = _parse_key_value_tokens(flag_tokens)
     params = {

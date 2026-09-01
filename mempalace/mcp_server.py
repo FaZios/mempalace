@@ -53,7 +53,7 @@ import hmac  # noqa: E402
 import sqlite3  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
-from datetime import date, datetime  # noqa: E402
+from datetime import date, datetime, timezone  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Optional  # noqa: E402
 from urllib.parse import urlparse  # noqa: E402
@@ -4008,6 +4008,13 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
 # ==================== KNOWLEDGE GRAPH ====================
 
 
+def _valid_from_has_started(valid_from, now_key: str) -> bool:
+    if not valid_from:
+        return True
+    start = valid_from if "T" in str(valid_from) else f"{valid_from}T00:00:00Z"
+    return str(start) <= now_key
+
+
 def tool_kg_query(entity: str, as_of: str = None, direction: str = "both"):
     """Query the knowledge graph for an entity's relationships."""
     try:
@@ -4021,16 +4028,27 @@ def tool_kg_query(entity: str, as_of: str = None, direction: str = "both"):
 
     results = _call_kg(lambda kg: kg.query_entity(entity, as_of=as_of, direction=direction))
     if as_of is None:
-        active = [r for r in results if r.get("current")]
-        historical = [r for r in results if not r.get("current")]
+        now_key = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        active = []
+        historical = []
+        future = []
+        for row in results:
+            if not row.get("current"):
+                historical.append(row)
+            elif not _valid_from_has_started(row.get("valid_from"), now_key):
+                future.append(row)
+            else:
+                active.append(row)
     else:
         active = results
         historical = []
+        future = []
     payload = {
         "entity": entity,
         "as_of": as_of,
         "active_facts": active,
         "historical_facts": historical,
+        "future_facts": future,
         "facts": results,
         "count": len(results),
     }

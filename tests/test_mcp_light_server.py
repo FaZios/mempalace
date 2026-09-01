@@ -530,3 +530,28 @@ class TestHubDispatch:
         assert captured["arguments"]["project_dir"] == "/custom/repo"
         assert captured["arguments"].get("apply") is True
         assert "project" not in captured["arguments"]
+
+    def test_taxonomy_in_wing_is_filtered_after_hub_rewrite(self, monkeypatch, config, kg):
+        _patch_light_server(monkeypatch, config, kg)
+        monkeypatch.setattr(mcp_server, "_hub_proxy_target", lambda: ("http://127.0.0.1:9", {}))
+
+        def fake_forward(base_url, headers, request, palace_path):
+            assert request["params"]["name"] == "mempalace_get_taxonomy"
+            assert "wing" not in request["params"]["arguments"]
+            payload = {"taxonomy": {"backend": {"auth": 2}, "secrets": {"keys": 9}}}
+            return {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {"content": [{"type": "text", "text": json.dumps(payload)}]},
+            }
+
+        monkeypatch.setattr(mcp_server, "_forward_request_to_hub", fake_forward)
+        req = {
+            "jsonrpc": "2.0",
+            "id": 92,
+            "method": "tools/call",
+            "params": {"name": "palace_query", "arguments": "TAXONOMY IN backend"},
+        }
+        res = mcp_light_server.dispatch_light_stdio_request(req)
+        payload = json.loads(res["result"]["content"][0]["text"])
+        assert payload == {"taxonomy": {"backend": {"auth": 2}}}

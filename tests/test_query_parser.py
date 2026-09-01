@@ -97,9 +97,17 @@ class TestPalaceQueryParser:
         assert target == "kg_query"
         assert params == {"entity": "Alice", "as_of": "2026-04-01", "direction": "outgoing"}
 
+        target, params = parse_query_input("KG Alice Smith AS OF 2026-04-01 DIRECTION outgoing")
+        assert target == "kg_query"
+        assert params == {"entity": "Alice Smith", "as_of": "2026-04-01", "direction": "outgoing"}
+
         target, params = parse_query_input("KG TIMELINE Bob")
         assert target == "kg_timeline"
         assert params == {"entity": "Bob"}
+
+        target, params = parse_query_input("KG TIMELINE Alice Smith")
+        assert target == "kg_timeline"
+        assert params == {"entity": "Alice Smith"}
 
         target, params = parse_query_input("KG STATS")
         assert target == "kg_stats"
@@ -235,6 +243,20 @@ class TestPalaceExecParser:
         target, params = parse_exec_input('KG ADD Alice -> note -> "status: active"')
         assert target == "kg_add"
         assert params["object"] == "status: active"
+
+        target, params = parse_exec_input(
+            "KG SUPERSEDE Max -> website: old => https://new.example AT 2026-01-01"
+        )
+        assert target == "kg_supersede"
+        assert params["old_object"] == "old"
+        assert params["new_object"] == "https://new.example"
+        assert params["at"] == "2026-01-01"
+
+        target, params = parse_exec_input(
+            'KG SUPERSEDE Max -> note: stale => "status: active" AT 2026-01-01'
+        )
+        assert target == "kg_supersede"
+        assert params["new_object"] == "status: active"
 
     def test_tunnel_create_and_delete(self):
         target, params = parse_exec_input(
