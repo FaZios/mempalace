@@ -17,6 +17,12 @@ class QueryParseError(ValueError):
 
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}([T ].*)?$")
+
+
+class QuotedToken(str):
+    """A DSL token that was written in quotes; never treated as a keyword flag."""
+
+
 _BARE_FLAGS = frozenset({"APPLY", "COMMIT", "PREVIEW", "DRY_RUN"})
 _KG_ADD_FLAGS = frozenset({"FROM", "TO", "VALID_FROM", "VALID_TO", "CLOSET", "DRAWER"})
 _KG_INVALIDATE_FLAGS = frozenset({"ENDED", "AT", "DATE"})
@@ -72,7 +78,7 @@ def tokenize_dsl(text: str) -> List[str]:
                 else:
                     content.append(ch)
                 pos += 1
-            tokens.append("".join(content))
+            tokens.append(QuotedToken("".join(content)))
             continue
 
         # Check for arrow symbols -> or =>
@@ -159,7 +165,7 @@ def _parse_key_value_tokens(tokens: List[str]) -> Dict[str, Any]:
                 continue
 
         # Standalone flag (e.g. APPLY, COMMIT, PREVIEW, DRY_RUN)
-        if tok.isupper() and tok not in ("->", "=>", ":"):
+        if tok.isupper() and tok not in ("->", "=>", ":") and not isinstance(tok, QuotedToken):
             result[tok.lower()] = True
             i += 1
             continue
@@ -196,6 +202,8 @@ def _parse_val(val: str) -> Any:
 
 def _is_known_flag_token(tok: str, flag_keys: frozenset) -> bool:
     """True when tok starts option flags, not when it merely contains a colon."""
+    if isinstance(tok, QuotedToken):
+        return False
     if tok.upper() in flag_keys:
         return True
     if ":" not in tok or tok.startswith("http://") or tok.startswith("https://"):
@@ -1163,6 +1171,10 @@ def parse_coordinate_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # no
             params.pop("base")
         if "id" in params and "event_id" not in params and action == "event_ack":
             params["event_id"] = params.pop("id")
+        if action == "event_append" and "type" not in params and "event_type" in params:
+            params["type"] = params.pop("event_type")
+        elif "event_type" in params:
+            params.pop("event_type")
         return action, params
 
     if isinstance(input_data, str) and input_data.strip().startswith("{"):

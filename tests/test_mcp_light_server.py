@@ -424,7 +424,12 @@ class TestSearchEnrichment:
             mcp_server,
             "tool_follow_tunnels",
             lambda wing, room: [
-                {"connected_wing": "guidelines", "connected_room": "rx", "drawer_id": "d1"}
+                {
+                    "connected_wing": "guidelines",
+                    "connected_room": "rx",
+                    "drawer_id": "d1",
+                    "drawer_preview": "outside-wing text that must not leak",
+                }
             ],
         )
         res = {
@@ -440,6 +445,7 @@ class TestSearchEnrichment:
         }
         out = mcp_light_server._enrich_search_results(res)
         assert out["connected_tunnels"][0]["connected_wing"] == "guidelines"
+        assert "drawer_preview" not in out["connected_tunnels"][0]
         assert "connected_room_context" not in out
 
 

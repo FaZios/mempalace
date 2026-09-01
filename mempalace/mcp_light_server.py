@@ -234,7 +234,15 @@ def _enrich_search_results(res: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 connections = []
             if connections:
-                res["connected_tunnels"] = connections[:3]
+                cleaned = []
+                for conn in connections[:3]:
+                    if isinstance(conn, dict):
+                        item = dict(conn)
+                        item.pop("drawer_preview", None)
+                        cleaned.append(item)
+                    else:
+                        cleaned.append(conn)
+                res["connected_tunnels"] = cleaned
         except Exception:
             pass
 

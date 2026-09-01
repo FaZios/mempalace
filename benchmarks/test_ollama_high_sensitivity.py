@@ -493,7 +493,13 @@ def evaluate_stress_model(model_name: str) -> Dict[str, Any]:
 
 
 def main():
-    MODELS = ["medgemma1.5-tools", "granite4.2:3b", "ornith-1.5:9b"]
+    MODELS = [
+        m.strip()
+        for m in os.environ.get(
+            "MEMPALACE_BENCH_MODELS", "medgemma1.5-tools,granite4.2:3b,ornith-1.5:9b"
+        ).split(",")
+        if m.strip()
+    ]
     all_evals = {}
 
     for m in MODELS:

@@ -526,7 +526,13 @@ def evaluate_model(model_name: str) -> Tuple[Dict[str, Any], List[ModelEvalResul
 
 
 def main():
-    MODELS_TO_TEST = ["medgemma1.5-tools", "granite4.2:3b", "ornith-1.5:9b"]
+    MODELS_TO_TEST = [
+        m.strip()
+        for m in os.environ.get(
+            "MEMPALACE_BENCH_MODELS", "medgemma1.5-tools,granite4.2:3b,ornith-1.5:9b"
+        ).split(",")
+        if m.strip()
+    ]
     all_reports = {}
 
     for model in MODELS_TO_TEST:

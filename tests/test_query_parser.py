@@ -244,6 +244,11 @@ class TestPalaceExecParser:
         assert target == "kg_add"
         assert params["object"] == "status: active"
 
+        target, params = parse_exec_input('KG ADD Alice -> note -> "FROM"')
+        assert target == "kg_add"
+        assert params["object"] == "FROM"
+        assert "valid_from" not in params
+
         target, params = parse_exec_input(
             "KG SUPERSEDE Max -> website: old => https://new.example AT 2026-01-01"
         )
@@ -431,3 +436,16 @@ class TestPalaceCoordinateParser:
         assert action == "event_list"
         assert params["stream"] == "project/x"
         assert params["limit"] == 10
+
+    def test_event_type_alias_becomes_type(self):
+        action, params = parse_coordinate_input(
+            {
+                "event_type": "task.request",
+                "stream": "project/x",
+                "room": "tasks",
+                "from_agent": "a",
+            }
+        )
+        assert action == "event_append"
+        assert params["type"] == "task.request"
+        assert "event_type" not in params
