@@ -8,13 +8,15 @@ The **MemPalace Lightweight MCP Server** reduces the MCP tool surface from **45 
 
 ### Connection Command
 ```bash
-claude mcp add mempalace -- mempalace-light-mcp
-codex mcp add mempalace -- mempalace-light-mcp
+claude mcp add mempalace-light -- mempalace-light-mcp
+codex mcp add mempalace-light -- mempalace-light-mcp
 ```
+
+Side-by-side with the existing 45-tool server: keep `mempalace` pointing at `mempalace-mcp`, and register the 3-tool server as `mempalace-light`.
 
 ### With Custom Palace Path
 ```bash
-claude mcp add mempalace -- mempalace-light-mcp --palace /path/to/palace
+claude mcp add mempalace-light -- mempalace-light-mcp --palace /path/to/palace
 ```
 
 ---

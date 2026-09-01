@@ -4025,8 +4025,8 @@ def tool_kg_query(entity: str, as_of: str = None, direction: str = "both"):
         historical = [r for r in results if not r.get("current")]
     else:
         active = results
-        historical = [r for r in results if not r.get("current")]
-    return {
+        historical = []
+    payload = {
         "entity": entity,
         "as_of": as_of,
         "active_facts": active,
@@ -4034,6 +4034,22 @@ def tool_kg_query(entity: str, as_of: str = None, direction: str = "both"):
         "facts": results,
         "count": len(results),
     }
+    if results:
+        resolved_names = {
+            r.get("subject") if r.get("direction") == "outgoing" else r.get("object")
+            for r in results
+        }
+        resolved_names.discard(None)
+        if len(resolved_names) == 1:
+            resolved = next(iter(resolved_names))
+            if resolved != entity:
+                payload["resolved_from"] = entity
+                payload["entity"] = resolved
+    else:
+        candidates = _call_kg(lambda kg: kg.find_entity_candidates(entity))
+        if candidates:
+            payload["candidates"] = candidates
+    return payload
 
 
 def tool_kg_add(

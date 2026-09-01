@@ -4143,6 +4143,24 @@ class TestKGTools:
         assert result["count"] == 1
         assert result["facts"][0]["object"] == "Acme"
 
+    def test_kg_query_as_of_does_not_duplicate_ended_facts(
+        self, monkeypatch, config, palace_path, kg
+    ):
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace import mcp_server
+
+        kg.add_triple(
+            "Alice",
+            "works_at",
+            "Acme",
+            valid_from="2026-01-01",
+            valid_to="2026-06-01",
+        )
+        result = mcp_server.tool_kg_query("Alice", as_of="2026-04-01", direction="outgoing")
+        assert result["count"] == 1
+        assert len(result["active_facts"]) == 1
+        assert result["historical_facts"] == []
+
     def test_kg_invalidate_accepts_datetime_ended(self, monkeypatch, config, palace_path, kg):
         _patch_mcp_server(monkeypatch, config, kg)
 

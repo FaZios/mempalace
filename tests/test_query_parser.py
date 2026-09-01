@@ -43,7 +43,9 @@ class TestTokenizeDsl:
 
 class TestPalaceQueryParser:
     def test_search_shorthand(self):
-        target, params = parse_query_input("FIND oauth token refresh IN backend/auth LIMIT 5 SINCE 2026-01-01")
+        target, params = parse_query_input(
+            "FIND oauth token refresh IN backend/auth LIMIT 5 SINCE 2026-01-01"
+        )
         assert target == "search"
         assert params["query"] == "oauth token refresh"
         assert params["wing"] == "backend"
@@ -52,7 +54,9 @@ class TestPalaceQueryParser:
         assert params["since"] == "2026-01-01"
 
     def test_search_with_quotes(self):
-        target, params = parse_query_input('SEARCH "sqlite concurrency deadlock" IN wing_core MAX_DIST 1.2')
+        target, params = parse_query_input(
+            'SEARCH "sqlite concurrency deadlock" IN wing_core MAX_DIST 1.2'
+        )
         assert target == "search"
         assert params["query"] == "sqlite concurrency deadlock"
         assert params["wing"] == "wing_core"
@@ -137,7 +141,9 @@ class TestPalaceQueryParser:
 
 class TestPalaceExecParser:
     def test_add_drawer(self):
-        target, params = parse_exec_input('ADD IN backend/auth "use jwt tokens" SOURCE auth.py ADDED_BY agent1')
+        target, params = parse_exec_input(
+            'ADD IN backend/auth "use jwt tokens" SOURCE auth.py ADDED_BY agent1'
+        )
         assert target == "add_drawer"
         assert params["wing"] == "backend"
         assert params["room"] == "auth"
@@ -146,7 +152,9 @@ class TestPalaceExecParser:
         assert params["added_by"] == "agent1"
 
     def test_update_and_delete_drawer(self):
-        target, params = parse_exec_input('UPDATE drw_123 CONTENT "new content" WING backend ROOM auth')
+        target, params = parse_exec_input(
+            'UPDATE drw_123 CONTENT "new content" WING backend ROOM auth'
+        )
         assert target == "update_drawer"
         assert params["drawer_id"] == "drw_123"
         assert params["content"] == "new content"
@@ -174,7 +182,9 @@ class TestPalaceExecParser:
         assert params["apply"] is True
 
     def test_checkpoint(self):
-        target, params = parse_exec_input('CHECKPOINT {"items": [{"wing": "w", "room": "r", "content": "c"}]}')
+        target, params = parse_exec_input(
+            'CHECKPOINT {"items": [{"wing": "w", "room": "r", "content": "c"}]}'
+        )
         assert target == "checkpoint"
         assert params == {"items": [{"wing": "w", "room": "r", "content": "c"}]}
 
@@ -208,7 +218,9 @@ class TestPalaceExecParser:
         }
 
     def test_tunnel_create_and_delete(self):
-        target, params = parse_exec_input('TUNNEL CREATE backend/api -> db/schema LABEL "API to DB"')
+        target, params = parse_exec_input(
+            'TUNNEL CREATE backend/api -> db/schema LABEL "API to DB"'
+        )
         assert target == "create_tunnel"
         assert params == {
             "source_wing": "backend",
@@ -227,7 +239,9 @@ class TestPalaceExecParser:
         assert params == {"hallway_id": "hlw_789"}
 
     def test_diary_write(self):
-        target, params = parse_exec_input('DIARY WRITE antigravity TOPIC auth "SESSION|added auth module"')
+        target, params = parse_exec_input(
+            'DIARY WRITE antigravity TOPIC auth "SESSION|added auth module"'
+        )
         assert target == "diary_write"
         assert params == {
             "agent_name": "antigravity",
@@ -245,7 +259,7 @@ class TestPalaceExecParser:
 class TestPalaceCoordinateParser:
     def test_task_create(self):
         cmd = (
-            'TASK CREATE project:mempalace from:agent1 to:agent2 '
+            "TASK CREATE project:mempalace from:agent1 to:agent2 "
             'goal:"Fix memory leak" branch:fix/leak base:a1b2c3d4 done:"All tests pass"'
         )
         target, params = parse_coordinate_input(cmd)
@@ -269,20 +283,26 @@ class TestPalaceCoordinateParser:
         assert params["to_agent"] == "agent2"
         assert params["body"] == "hello"
 
-        target, params = parse_coordinate_input("EVENT LIST stream:project/mempalace to:agent1 since_id:evt_100 limit:20")
+        target, params = parse_coordinate_input(
+            "EVENT LIST stream:project/mempalace to:agent1 since_id:evt_100 limit:20"
+        )
         assert target == "event_list"
         assert params["stream"] == "project/mempalace"
         assert params["to_agent"] == "agent1"
         assert params["since_event_id"] == "evt_100"
         assert params["limit"] == 20
 
-        target, params = parse_coordinate_input("EVENT WAIT stream:project/mempalace correlation:task_1 timeout:5000")
+        target, params = parse_coordinate_input(
+            "EVENT WAIT stream:project/mempalace correlation:task_1 timeout:5000"
+        )
         assert target == "event_wait"
         assert params["stream"] == "project/mempalace"
         assert params["correlation_id"] == "task_1"
         assert params["timeout_ms"] == 5000
 
-        target, params = parse_coordinate_input('EVENT ACK id:evt_123 from:agent1 status:applied body:"Done"')
+        target, params = parse_coordinate_input(
+            'EVENT ACK id:evt_123 from:agent1 status:applied body:"Done"'
+        )
         assert target == "event_ack"
         assert params["event_id"] == "evt_123"
         assert params["from_agent"] == "agent1"
@@ -290,7 +310,9 @@ class TestPalaceCoordinateParser:
         assert params["body"] == "Done"
 
     def test_artifact_put_get_patch(self):
-        target, params = parse_coordinate_input('ARTIFACT PUT kind:patch created_by:agent1 content:"diff --git a/b"')
+        target, params = parse_coordinate_input(
+            'ARTIFACT PUT kind:patch created_by:agent1 content:"diff --git a/b"'
+        )
         assert target == "artifact_put"
         assert params["kind"] == "patch"
         assert params["created_by"] == "agent1"
@@ -300,7 +322,9 @@ class TestPalaceCoordinateParser:
         assert target == "artifact_get"
         assert params["artifact_id"] == "art_999"
 
-        target, params = parse_coordinate_input('PATCH SUBMIT stream:project/mempalace from:agent1 diff:"diff content"')
+        target, params = parse_coordinate_input(
+            'PATCH SUBMIT stream:project/mempalace from:agent1 diff:"diff content"'
+        )
         assert target == "patch_submit"
         assert params["stream"] == "project/mempalace"
         assert params["from_agent"] == "agent1"
@@ -311,14 +335,58 @@ class TestPalaceCoordinateParser:
         assert parse_coordinate_input("PEERS")[0] == "mesh_peers"
 
     def test_structured_dict_with_embedded_dsl_keywords(self):
-        for kw in ["DRAWERS IN backend/auth", "FOLLOW backend/auth", "FILED", "SETTINGS", "AAAK SPEC"]:
+        for kw in [
+            "DRAWERS IN backend/auth",
+            "FOLLOW backend/auth",
+            "FILED",
+            "SETTINGS",
+            "AAAK SPEC",
+        ]:
             target, params = parse_query_input({"query": kw})
             assert target in ("drawers", "follow_tunnels", "filed", "settings", "aaak_spec")
 
     def test_structured_target_aliases(self):
         assert parse_query_input({"target": "rooms", "wing": "core"}) == ("rooms", {"wing": "core"})
-        assert parse_query_input({"target": "drawers", "wing": "core"}) == ("drawers", {"wing": "core"})
+        assert parse_query_input({"target": "drawers", "wing": "core"}) == (
+            "drawers",
+            {"wing": "core"},
+        )
         assert parse_query_input({"target": "graph_stats"}) == ("graph_stats", {})
         assert parse_query_input({"target": "kg_stats"}) == ("kg_stats", {})
-        assert parse_query_input({"target": "list_tunnels", "wing": "core"}) == ("list_tunnels", {"wing": "core"})
+        assert parse_query_input({"target": "list_tunnels", "wing": "core"}) == (
+            "list_tunnels",
+            {"wing": "core"},
+        )
+        assert parse_query_input({"target": "find_tunnels", "wing_a": "a", "wing_b": "b"}) == (
+            "find_tunnels",
+            {"wing_a": "a", "wing_b": "b"},
+        )
         assert parse_query_input({"target": "list_hallways"}) == ("list_hallways", {})
+
+    def test_structured_search_keeps_limit(self):
+        target, params = parse_query_input({"query": "hello", "limit": 5})
+        assert target == "search"
+        assert params["query"] == "hello"
+        assert params["limit"] == 5
+
+    def test_event_list_since_timestamp_is_not_an_event_id(self):
+        target, params = parse_coordinate_input("EVENT LIST stream:project/x since:2026-09-01")
+        assert target == "event_list"
+        assert params["since_created_at"] == "2026-09-01"
+        assert "since_event_id" not in params
+
+    def test_event_list_since_id_still_maps(self):
+        target, params = parse_coordinate_input("EVENT LIST since_id:evt_100")
+        assert params["since_event_id"] == "evt_100"
+
+    def test_event_list_bare_since_rejects_non_id_non_date(self):
+        with pytest.raises(QueryParseError, match="since"):
+            parse_coordinate_input("EVENT LIST since:yesterday")
+
+    def test_coordinate_dict_merges_command_and_limit(self):
+        action, params = parse_coordinate_input(
+            {"command": "EVENT LIST stream:project/x", "limit": 10}
+        )
+        assert action == "event_list"
+        assert params["stream"] == "project/x"
+        assert params["limit"] == 10

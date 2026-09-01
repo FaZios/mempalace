@@ -412,3 +412,24 @@ class TestCandidateResolution:
         assert len(res) >= 1
         assert res[0]["subject"] == "Alice Smith"
         assert res[0]["object"] == "Acme"
+
+    def test_short_token_does_not_merge_entities(self, kg):
+        kg.add_triple("Alice", "knows", "Bob")
+        kg.add_triple("Albert", "knows", "Carol")
+        assert kg.query_entity("a") == []
+        assert kg.query_entity("al") == []
+
+    def test_multiple_candidates_do_not_mix_facts(self, kg):
+        kg.add_triple("Alice Smith", "works_at", "Acme")
+        kg.add_triple("Bob Smith", "works_at", "Globex")
+        res = kg.query_entity("Smith")
+        assert res == []
+        names = {c["name"] for c in kg.find_entity_candidates("Smith")}
+        assert names == {"Alice Smith", "Bob Smith"}
+
+    def test_like_metacharacters_are_literal(self, kg):
+        kg.add_triple("100_percent", "rated", "high")
+        kg.add_triple("Alice", "knows", "Bob")
+        assert kg.query_entity("%") == []
+        assert kg.query_entity("_") == []
+        assert kg.query_entity("100%") == []

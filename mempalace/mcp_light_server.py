@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import sys
-import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -29,41 +28,88 @@ except (OSError, AttributeError):
     pass
 sys.stdout = sys.stderr
 
-from .version import __version__
-from .query_parser import (
+from .version import __version__  # noqa: E402
+from .query_parser import (  # noqa: E402
     QueryParseError,
     parse_coordinate_input,
     parse_exec_input,
     parse_query_input,
 )
-from . import mcp_server
+from . import mcp_server  # noqa: E402
 
-import inspect
+import inspect  # noqa: E402
 
 logger = logging.getLogger("mempalace_mcp_light")
 
 _PQL_KEYWORDS = {
-    "FIND", "SEARCH", "TAXONOMY", "WINGS", "ROOMS", "DRAWER", "DRAWERS",
-    "CHECK", "AAAK", "KG", "TRAVERSE", "TUNNEL", "TUNNELS", "FOLLOW",
-    "HALLWAY", "HALLWAYS", "GRAPH", "DIARY", "STATUS", "FILED", "SETTINGS",
-    "ADD", "UPDATE", "DELETE", "CREATE", "MINE", "SYNC", "CHECKPOINT", "RECONNECT",
-    "TASK", "EVENT", "EVENTS", "LOGSTREAM", "ARTIFACT", "PATCH", "PEERS", "MESH",
+    "FIND",
+    "SEARCH",
+    "TAXONOMY",
+    "WINGS",
+    "ROOMS",
+    "DRAWER",
+    "DRAWERS",
+    "CHECK",
+    "AAAK",
+    "KG",
+    "TRAVERSE",
+    "TUNNEL",
+    "TUNNELS",
+    "FOLLOW",
+    "HALLWAY",
+    "HALLWAYS",
+    "GRAPH",
+    "DIARY",
+    "STATUS",
+    "FILED",
+    "SETTINGS",
+    "ADD",
+    "UPDATE",
+    "DELETE",
+    "CREATE",
+    "MINE",
+    "SYNC",
+    "CHECKPOINT",
+    "RECONNECT",
+    "TASK",
+    "EVENT",
+    "EVENTS",
+    "LOGSTREAM",
+    "ARTIFACT",
+    "PATCH",
+    "PEERS",
+    "MESH",
 }
+
+_WRAPPER_KEYS = (
+    "command",
+    "input",
+    "dsl",
+    "pql",
+    "query",
+    "expression",
+    "text",
+    "prompt",
+    "raw",
+)
 
 
 def _unwrap_wrapper_input(arguments: Any) -> Any:
-    """If arguments is a dict containing a command/input string, unwrap it."""
+    """Unwrap a lone DSL string; keep sibling structured fields for the parsers."""
     if not isinstance(arguments, dict):
         return arguments
 
-    # Check common wrapper keys
-    for k in ("command", "input", "dsl", "pql", "query", "expression", "text", "prompt", "raw"):
+    extra_keys = [k for k in arguments if k not in _WRAPPER_KEYS]
+    if extra_keys:
+        return arguments
+
+    for k in _WRAPPER_KEYS:
         if k in arguments and isinstance(arguments[k], str):
             val_stripped = arguments[k].strip()
             if not val_stripped:
                 continue
             first_word = val_stripped.split(None, 1)[0].upper()
-            if first_word in _PQL_KEYWORDS or len(arguments) <= 2:
+            if first_word in _PQL_KEYWORDS or len(arguments) == 1:
                 return val_stripped
 
     return arguments
@@ -101,7 +147,7 @@ def _call_handler_safe(handler, params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _resolve_fuzzy_wing(wing: Optional[str]) -> Optional[str]:
-    """If a wing name is shorthand (e.g. 'backend' for 'project_backend'), resolve it."""
+    """Resolve unique exact or '_suffix' wing names. Never substring-match."""
     if not wing:
         return wing
     try:
@@ -111,17 +157,37 @@ def _resolve_fuzzy_wing(wing: Optional[str]) -> Optional[str]:
             if wing in known:
                 return wing
             w_low = wing.lower()
-            for kw in known:
-                kw_low = kw.lower()
-                if kw_low.endswith(f"_{w_low}") or kw_low.endswith(w_low) or w_low in kw_low:
-                    return kw
+            matches = [
+                kw
+                for kw in known
+                if str(kw).lower() == w_low or str(kw).lower().endswith(f"_{w_low}")
+            ]
+            if len(matches) == 1:
+                return matches[0]
     except Exception:
         pass
     return wing
 
 
+def _search_distance(item: Dict[str, Any]) -> Optional[float]:
+    raw = item.get("distance")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _search_timestamp(item: Dict[str, Any]) -> str:
+    value = item.get("filed_at") or item.get("created_at") or ""
+    if not value or value == "unknown":
+        return ""
+    return str(value)
+
+
 def _enrich_search_results(res: Dict[str, Any]) -> Dict[str, Any]:
-    """Enhance search results with temporal recency, relevance confidence, and tunnel links."""
+    """Tag search hits with confidence/recency; keep searcher ranking."""
     if not isinstance(res, dict) or "results" not in res:
         return res
 
@@ -132,39 +198,43 @@ def _enrich_search_results(res: Dict[str, Any]) -> Dict[str, Any]:
         res["summary"] = "No matching memories found in the palace for this query."
         return res
 
-    # 1. Relevance confidence gating
-    min_dist = min((item.get("distance", 1.0) for item in results_list), default=1.0)
-    if min_dist > 0.52:
-        res["relevance_confidence"] = "low"
-        res["warning"] = "Low semantic similarity. No confident memories found for this query."
-    elif min_dist < 0.35:
-        res["relevance_confidence"] = "high"
-    else:
-        res["relevance_confidence"] = "moderate"
+    distances = [d for d in (_search_distance(item) for item in results_list) if d is not None]
+    if distances:
+        min_dist = min(distances)
+        if min_dist > 0.52:
+            res["relevance_confidence"] = "low"
+        elif min_dist < 0.35:
+            res["relevance_confidence"] = "high"
+        else:
+            res["relevance_confidence"] = "moderate"
 
-    # 2. Chronological & temporal ordering
-    def _sort_key(item):
-        return item.get("filed_at") or item.get("created_at") or ""
-
-    sorted_results = sorted(results_list, key=_sort_key, reverse=True)
-    for idx, item in enumerate(sorted_results, 1):
-        item["recency_rank"] = idx
-        if idx == 1 and len(sorted_results) > 1 and _sort_key(item):
+    by_recency = sorted(
+        range(len(results_list)),
+        key=lambda i: _search_timestamp(results_list[i]),
+        reverse=True,
+    )
+    for recency_rank, orig_i in enumerate(by_recency, 1):
+        item = results_list[orig_i]
+        item["recency_rank"] = recency_rank
+        if recency_rank == 1 and len(results_list) > 1 and _search_timestamp(item):
             item["is_latest_record"] = True
 
-    res["results"] = sorted_results
+    res["results"] = results_list
 
-    # 3. Tunnel graph expansion (single-hop connected room context)
-    top_item = sorted_results[0]
+    top_item = results_list[0]
     top_wing = top_item.get("wing")
     top_room = top_item.get("room")
     if top_wing and top_room:
         try:
             tunnel_res = mcp_server.tool_follow_tunnels(top_wing, top_room)
-            if isinstance(tunnel_res, dict) and "connections" in tunnel_res and tunnel_res["connections"]:
-                res["connected_tunnels"] = tunnel_res["connections"][:3]
-                if "drawers" in tunnel_res and tunnel_res["drawers"]:
-                    res["connected_room_context"] = tunnel_res["drawers"][:2]
+            if isinstance(tunnel_res, dict) and tunnel_res.get("error"):
+                connections = []
+            elif isinstance(tunnel_res, list):
+                connections = tunnel_res
+            else:
+                connections = []
+            if connections:
+                res["connected_tunnels"] = connections[:3]
         except Exception:
             pass
 
@@ -341,6 +411,7 @@ LIGHT_TOOLS = {
             "properties": {
                 "query": {
                     "type": "string",
+                    "maxLength": 250,
                     "description": "PQL query DSL string (e.g. 'FIND auth IN backend/auth LIMIT 5' or 'STATUS')",
                 },
                 "target": {
@@ -358,12 +429,53 @@ LIGHT_TOOLS = {
                 "since": {"type": "string", "description": "Start ISO date/datetime (optional)"},
                 "before": {"type": "string", "description": "End ISO date/datetime (optional)"},
                 "entity": {"type": "string", "description": "Entity for KG queries (optional)"},
-                "as_of": {"type": "string", "description": "Point-in-time date for KG queries (optional)"},
-                "direction": {"type": "string", "description": "outgoing, incoming, or both for KG (optional)"},
-                "start_room": {"type": "string", "description": "Starting room for graph traversal (optional)"},
+                "as_of": {
+                    "type": "string",
+                    "description": "Point-in-time date for KG queries (optional)",
+                },
+                "direction": {
+                    "type": "string",
+                    "description": "outgoing, incoming, or both for KG (optional)",
+                },
+                "start_room": {
+                    "type": "string",
+                    "description": "Starting room for graph traversal (optional)",
+                },
                 "max_hops": {"type": "integer", "description": "Max traversal hops (default 2)"},
-                "agent_name": {"type": "string", "description": "Agent name for diary read (optional)"},
-                "content": {"type": "string", "description": "Content string for duplicate check (optional)"},
+                "agent_name": {
+                    "type": "string",
+                    "description": "Agent name for diary read (optional)",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Content string for duplicate check (optional)",
+                },
+                "drawer_id": {
+                    "type": "string",
+                    "description": "Drawer ID for get_drawer (optional)",
+                },
+                "last_n": {"type": "integer", "description": "Diary entry count (optional)"},
+                "max_distance": {
+                    "type": "number",
+                    "description": "Max cosine distance for search (optional)",
+                },
+                "candidate_strategy": {
+                    "type": "string",
+                    "enum": ["vector", "union"],
+                    "description": "Search candidate strategy (optional)",
+                },
+                "source_file": {
+                    "type": "string",
+                    "description": "Exact source_file filter (optional)",
+                },
+                "wing_a": {
+                    "type": "string",
+                    "description": "First wing for find_tunnels (optional)",
+                },
+                "wing_b": {
+                    "type": "string",
+                    "description": "Second wing for find_tunnels (optional)",
+                },
             },
         },
         "handler": tool_palace_query,
@@ -394,16 +506,55 @@ LIGHT_TOOLS = {
                 },
                 "wing": {"type": "string", "description": "Target wing (optional)"},
                 "room": {"type": "string", "description": "Target room (optional)"},
-                "content": {"type": "string", "description": "Verbatim content to store/update (optional)"},
-                "drawer_id": {"type": "string", "description": "Drawer ID for update/delete (optional)"},
+                "content": {
+                    "type": "string",
+                    "description": "Verbatim content to store/update (optional)",
+                },
+                "drawer_id": {
+                    "type": "string",
+                    "description": "Drawer ID for update/delete (optional)",
+                },
                 "items": {"type": "array", "description": "Batch items for checkpoint (optional)"},
-                "diary": {"type": "object", "description": "Diary entry object for checkpoint (optional)"},
+                "diary": {
+                    "type": "object",
+                    "description": "Diary entry object for checkpoint (optional)",
+                },
                 "source": {"type": "string", "description": "Source path for mine (optional)"},
-                "subject": {"type": "string", "description": "Subject for KG operations (optional)"},
-                "predicate": {"type": "string", "description": "Predicate for KG operations (optional)"},
+                "subject": {
+                    "type": "string",
+                    "description": "Subject for KG operations (optional)",
+                },
+                "predicate": {
+                    "type": "string",
+                    "description": "Predicate for KG operations (optional)",
+                },
                 "object": {"type": "string", "description": "Object for KG operations (optional)"},
-                "old_object": {"type": "string", "description": "Old object for KG supersede (optional)"},
-                "new_object": {"type": "string", "description": "New object for KG supersede (optional)"},
+                "old_object": {
+                    "type": "string",
+                    "description": "Old object for KG supersede (optional)",
+                },
+                "new_object": {
+                    "type": "string",
+                    "description": "New object for KG supersede (optional)",
+                },
+                "source_file": {
+                    "type": "string",
+                    "description": "Source path for mine/delete_by_source (optional)",
+                },
+                "source_wing": {
+                    "type": "string",
+                    "description": "Source wing for create_tunnel (optional)",
+                },
+                "target_wing": {
+                    "type": "string",
+                    "description": "Target wing for create_tunnel (optional)",
+                },
+                "valid_from": {"type": "string", "description": "KG fact start (optional)"},
+                "valid_to": {"type": "string", "description": "KG fact end (optional)"},
+                "project": {
+                    "type": "string",
+                    "description": "Project directory for mine/sync (optional)",
+                },
             },
         },
         "handler": tool_palace_exec,
@@ -413,7 +564,7 @@ LIGHT_TOOLS = {
             "Unified Multi-Agent Coordination Engine (RFC 003 / RFC 005). Immutable task delegation, "
             "logstream event append/list/wait/ack, artifact put/get, patch submission, and mesh estate snapshot. "
             "Accepts a concise coordination DSL string (e.g. 'TASK CREATE project:mempalace from:agent1 "
-            "to:agent2 goal:\"fix\" branch:b base:c done:\"done\"', 'EVENT APPEND type:task.request ...', "
+            'to:agent2 goal:"fix" branch:b base:c done:"done"\', \'EVENT APPEND type:task.request ...\', '
             "'EVENT LIST stream:project/x ...', 'EVENT WAIT correlation:task_1', 'EVENT ACK id:evt_1 "
             "from:agent1 status:applied', 'ARTIFACT PUT kind:patch ...', 'PATCH SUBMIT ...', 'MESH PEERS') "
             "or a structured dict payload."
@@ -448,6 +599,22 @@ LIGHT_TOOLS = {
                 "content": {"type": "string", "description": "Artifact / Patch content (optional)"},
                 "artifact_id": {"type": "string", "description": "Artifact ID to get (optional)"},
                 "event_id": {"type": "string", "description": "Event ID to ack (optional)"},
+                "since_event_id": {
+                    "type": "string",
+                    "description": "Resume cursor: events after this id (optional)",
+                },
+                "before_event_id": {
+                    "type": "string",
+                    "description": "Page backward: events before this id (optional)",
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "description": "EVENT WAIT timeout in milliseconds (optional)",
+                },
+                "kind": {"type": "string", "description": "Artifact kind (optional)"},
+                "created_by": {"type": "string", "description": "Artifact author (optional)"},
+                "metadata": {"type": "object", "description": "Event/artifact metadata (optional)"},
+                "topic": {"type": "string", "description": "Event topic (optional)"},
             },
         },
         "handler": tool_palace_coordinate,
@@ -471,6 +638,51 @@ def _restore_stdout():
     sys.stdout = _REAL_STDOUT
 
 
+_QUERY_TARGET_TO_TOOL = {
+    "search": "mempalace_search",
+    "find": "mempalace_search",
+    "kg_query": "mempalace_kg_query",
+    "kg": "mempalace_kg_query",
+    "kg_timeline": "mempalace_kg_timeline",
+    "timeline": "mempalace_kg_timeline",
+    "kg_stats": "mempalace_kg_stats",
+    "rooms": "mempalace_list_rooms",
+    "list_rooms": "mempalace_list_rooms",
+    "wings": "mempalace_list_wings",
+    "list_wings": "mempalace_list_wings",
+    "drawers": "mempalace_list_drawers",
+    "list_drawers": "mempalace_list_drawers",
+    "drawer": "mempalace_get_drawer",
+    "get_drawer": "mempalace_get_drawer",
+    "status": "mempalace_status",
+    "filed": "mempalace_memories_filed_away",
+    "memories_filed_away": "mempalace_memories_filed_away",
+    "settings": "mempalace_hook_settings",
+    "hook_settings": "mempalace_hook_settings",
+    "find_tunnels": "mempalace_find_tunnels",
+    "list_tunnels": "mempalace_list_tunnels",
+    "tunnels": "mempalace_list_tunnels",
+    "follow_tunnels": "mempalace_follow_tunnels",
+    "follow": "mempalace_follow_tunnels",
+    "diary_read": "mempalace_diary_read",
+    "diary": "mempalace_diary_read",
+    "check_duplicate": "mempalace_check_duplicate",
+    "duplicate": "mempalace_check_duplicate",
+    "check": "mempalace_check_duplicate",
+    "aaak_spec": "mempalace_get_aaak_spec",
+    "aaak": "mempalace_get_aaak_spec",
+    "get_aaak_spec": "mempalace_get_aaak_spec",
+    "taxonomy": "mempalace_get_taxonomy",
+    "get_taxonomy": "mempalace_get_taxonomy",
+    "traverse": "mempalace_traverse_graph",
+    "traverse_graph": "mempalace_traverse_graph",
+    "list_hallways": "mempalace_list_hallways",
+    "hallways": "mempalace_list_hallways",
+    "graph_stats": "mempalace_graph_stats",
+    "stats": "mempalace_graph_stats",
+}
+
+
 def _classify_underlying_tool(tool_name: str, arguments: Any) -> str:
     """Map a consolidated lightweight tool call to its underlying legacy tool name for preflight gates."""
     unwrapped = _unwrap_wrapper_input(arguments)
@@ -479,47 +691,19 @@ def _classify_underlying_tool(tool_name: str, arguments: Any) -> str:
             action, _ = parse_exec_input(unwrapped)
             return f"mempalace_{action}"
         except Exception:
-            return "mempalace_add_drawer"  # Conservatively treat as mutating write
+            return "mempalace_add_drawer"
 
-    elif tool_name == "palace_coordinate":
+    if tool_name == "palace_coordinate":
         try:
             action, _ = parse_coordinate_input(unwrapped)
-            if action in ("task_create", "event_append", "event_ack", "artifact_put", "patch_submit"):
-                return f"mempalace_{action}"
-            elif action == "event_list":
-                return "mempalace_event_list"
-            elif action == "mesh_peers":
-                return "mempalace_mesh_peers"
-            elif action == "event_wait":
-                return "mempalace_event_wait"
-            elif action == "artifact_get":
-                return "mempalace_artifact_get"
             return f"mempalace_{action}"
         except Exception:
-            return "mempalace_event_append"  # Conservatively treat as coordination write
+            return "mempalace_event_append"
 
-    elif tool_name == "palace_query":
+    if tool_name == "palace_query":
         try:
             target, _ = parse_query_input(unwrapped)
-            if target in ("search", "find"):
-                return "mempalace_search"
-            elif target in ("kg_query", "kg"):
-                return "mempalace_kg_query"
-            elif target in ("kg_timeline", "timeline"):
-                return "mempalace_kg_timeline"
-            elif target in ("kg_stats",):
-                return "mempalace_kg_stats"
-            elif target in ("rooms", "list_rooms"):
-                return "mempalace_list_rooms"
-            elif target in ("wings", "list_wings"):
-                return "mempalace_list_wings"
-            elif target in ("drawers", "list_drawers"):
-                return "mempalace_list_drawers"
-            elif target in ("drawer", "get_drawer"):
-                return "mempalace_get_drawer"
-            elif target in ("status",):
-                return "mempalace_status"
-            return f"mempalace_{target}"
+            return _QUERY_TARGET_TO_TOOL.get(target, f"mempalace_{target}")
         except Exception:
             return "mempalace_search"
 
@@ -528,6 +712,7 @@ def _classify_underlying_tool(tool_name: str, arguments: Any) -> str:
 
 def handle_light_request(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Process a single JSON-RPC request for the lightweight MCP server."""
+    mcp_server._last_request_time = time.monotonic()
     if not isinstance(request, dict) or request.get("jsonrpc") != "2.0":
         return {
             "jsonrpc": "2.0",
@@ -603,7 +788,8 @@ def handle_light_request(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         try:
             handler = LIGHT_TOOLS[tool_name]["handler"]
-            result = handler(arguments)
+            with mcp_server._write_stall_watch(underlying_name):
+                result = handler(arguments)
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -621,6 +807,8 @@ def handle_light_request(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         except Exception as e:
             return mcp_server._internal_tool_error(req_id, tool_name, e)
 
+    if req_id is None:
+        return None
     return {
         "jsonrpc": "2.0",
         "id": req_id,
@@ -644,14 +832,27 @@ def main():
 
     # Run stdio protocol loop with lightweight dispatcher
     _restore_stdout()
+    for stream in (sys.stdin, sys.stdout):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, OSError):
+                pass
     logger.info("MemPalace Lightweight MCP Server starting (3 consolidated tools)...")
+    mcp_server._maybe_eager_warmup_embedder()
+    mcp_server._start_idle_exit_watchdog()
+    mcp_server._start_write_stall_watchdog()
 
     while True:
         try:
             line = sys.stdin.readline()
         except KeyboardInterrupt:
             break
+        except OSError as exc:
+            logger.info("stdin read failed (%s) -- client disconnected, shutting down", exc)
+            break
         if not line:
+            logger.info("stdin EOF -- client disconnected, shutting down")
             break
         line = line.strip()
         if not line:

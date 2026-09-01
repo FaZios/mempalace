@@ -9,44 +9,14 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 class QueryParseError(ValueError):
     """Raised when a PQL DSL string cannot be parsed."""
 
 
-# --- Tokenizer / Lexer Helper ---
-
-_TOKEN_RE = re.compile(
-    r"""
-    \s*(?:
-        # Quoted string with double quotes (supports escape sequences)
-        "((?:[^"\\]|\\.)*)"
-        |
-        # Quoted string with single quotes
-        '((?:[^'\\]|\\.)*)'
-        |
-        # JSON / Object / Array block { ... } or [ ... ]
-        (?P<json>\{(?:[^{}]|(?P<rec_json>\{(?:[^{}])*\}))*\}|\[(?:[^\[\]])*\])
-        |
-        # Symbols and arrows
-        (?P<sym>->|=>|:)
-        |
-        # Unquoted word / token
-        (?P<word>[^\s"':=]+)
-    )
-    """,
-    re.VERBOSE | re.DOTALL,
-)
-
-
-def _unescape_str(s: str) -> str:
-    """Unescape common escape sequences in quoted strings."""
-    try:
-        return s.encode("utf-8").decode("unicode_escape")
-    except Exception:
-        return s.replace('\\"', '"').replace("\\'", "'").replace("\\n", "\n").replace("\\t", "\t")
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}([T ].*)?$")
 
 
 def tokenize_dsl(text: str) -> List[str]:
@@ -224,7 +194,7 @@ def _parse_val(val: str) -> Any:
 # ==============================================================================
 
 
-def parse_query_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
+def parse_query_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # noqa: C901
     """
     Parse input to `palace_query`.
 
@@ -239,7 +209,29 @@ def parse_query_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
             if k in params and isinstance(params[k], str):
                 v_strip = params[k].strip()
                 first_w = v_strip.split(None, 1)[0].upper() if v_strip else ""
-                if first_w in ("FIND", "SEARCH", "TAXONOMY", "WINGS", "ROOMS", "DRAWER", "DRAWERS", "CHECK", "AAAK", "KG", "TRAVERSE", "TUNNELS", "TUNNEL", "FOLLOW", "HALLWAYS", "HALLWAY", "GRAPH", "DIARY", "STATUS", "FILED", "SETTINGS"):
+                if first_w in (
+                    "FIND",
+                    "SEARCH",
+                    "TAXONOMY",
+                    "WINGS",
+                    "ROOMS",
+                    "DRAWER",
+                    "DRAWERS",
+                    "CHECK",
+                    "AAAK",
+                    "KG",
+                    "TRAVERSE",
+                    "TUNNELS",
+                    "TUNNEL",
+                    "FOLLOW",
+                    "HALLWAYS",
+                    "HALLWAY",
+                    "GRAPH",
+                    "DIARY",
+                    "STATUS",
+                    "FILED",
+                    "SETTINGS",
+                ):
                     op, parsed_p = parse_query_input(v_strip)
                     for pk, pv in params.items():
                         if pk not in (k, "target", "action") and pk not in parsed_p:
@@ -275,8 +267,10 @@ def parse_query_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
                     params["query"] = params.pop("content")
                 elif "text" in params:
                     params["query"] = params.pop("text")
-        elif t_lower in ("list_tunnels", "tunnels", "find_tunnels"):
+        elif t_lower in ("list_tunnels", "tunnels"):
             target = "list_tunnels"
+        elif t_lower == "find_tunnels":
+            target = "find_tunnels"
         elif t_lower in ("list_drawers", "drawers"):
             target = "drawers"
         elif t_lower in ("list_hallways", "hallways"):
@@ -306,7 +300,9 @@ def parse_query_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
             pass
 
     if not isinstance(input_data, str):
-        raise QueryParseError(f"Expected string or dict query input, got {type(input_data).__name__}")
+        raise QueryParseError(
+            f"Expected string or dict query input, got {type(input_data).__name__}"
+        )
 
     raw_text = input_data.strip()
     if not raw_text:
@@ -580,7 +576,7 @@ def parse_query_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
 # ==============================================================================
 
 
-def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
+def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # noqa: C901
     """
     Parse input to `palace_exec`.
 
@@ -595,7 +591,21 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
             if k in params and isinstance(params[k], str):
                 v_strip = params[k].strip()
                 first_w = v_strip.split(None, 1)[0].upper() if v_strip else ""
-                if first_w in ("ADD", "UPDATE", "DELETE", "CREATE", "TUNNEL", "HALLWAY", "KG", "DIARY", "MINE", "SYNC", "CHECKPOINT", "RECONNECT", "SETTINGS"):
+                if first_w in (
+                    "ADD",
+                    "UPDATE",
+                    "DELETE",
+                    "CREATE",
+                    "TUNNEL",
+                    "HALLWAY",
+                    "KG",
+                    "DIARY",
+                    "MINE",
+                    "SYNC",
+                    "CHECKPOINT",
+                    "RECONNECT",
+                    "SETTINGS",
+                ):
                     op, parsed_p = parse_exec_input(v_strip)
                     for pk, pv in params.items():
                         if pk not in (k, "action", "target") and pk not in parsed_p:
@@ -612,7 +622,11 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
                 action = "delete_drawer"
             elif "subject" in params and "predicate" in params and "old_object" in params:
                 action = "kg_supersede"
-            elif "subject" in params and "predicate" in params and ("object" in params or "obj" in params):
+            elif (
+                "subject" in params
+                and "predicate" in params
+                and ("object" in params or "obj" in params)
+            ):
                 action = "kg_add"
             elif "source_wing" in params and "target_wing" in params:
                 action = "create_tunnel"
@@ -655,7 +669,9 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
             pass
 
     if not isinstance(input_data, str):
-        raise QueryParseError(f"Expected string or dict exec input, got {type(input_data).__name__}")
+        raise QueryParseError(
+            f"Expected string or dict exec input, got {type(input_data).__name__}"
+        )
 
     raw_text = input_data.strip()
     if not raw_text:
@@ -740,7 +756,9 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
         if not params.get("content"):
             raise QueryParseError("ADD requires content to store")
         if not params.get("wing") or not params.get("room"):
-            raise QueryParseError("ADD requires wing and room (e.g. 'ADD IN backend/auth \"content\"')")
+            raise QueryParseError(
+                "ADD requires wing and room (e.g. 'ADD IN backend/auth \"content\"')"
+            )
         return "add_drawer", params
 
     if first_tok == "UPDATE":
@@ -798,13 +816,18 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
                 predicate = remaining[1]
                 obj_and_flags = remaining[2:]
             else:
-                raise QueryParseError("KG ADD requires 'subject -> predicate -> object' or 'subject predicate object'")
+                raise QueryParseError(
+                    "KG ADD requires 'subject -> predicate -> object' or 'subject predicate object'"
+                )
 
             obj_tokens = []
             flag_tokens = []
             in_flags = False
             for t in obj_and_flags:
-                if t.upper() in ("FROM", "TO", "VALID_FROM", "VALID_TO", "CLOSET", "DRAWER") or ":" in t:
+                if (
+                    t.upper() in ("FROM", "TO", "VALID_FROM", "VALID_TO", "CLOSET", "DRAWER")
+                    or ":" in t
+                ):
                     in_flags = True
                 if in_flags:
                     flag_tokens.append(t)
@@ -841,7 +864,9 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
                 predicate = remaining[1]
                 obj_and_flags = remaining[2:]
             else:
-                raise QueryParseError("KG INVALIDATE requires 'subject -> predicate -> object' or 'subject predicate object'")
+                raise QueryParseError(
+                    "KG INVALIDATE requires 'subject -> predicate -> object' or 'subject predicate object'"
+                )
 
             obj_tokens = []
             flag_tokens = []
@@ -912,7 +937,9 @@ def parse_exec_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
                         label = " ".join(remaining[2:]).strip("'\"")
 
             if not sw or not sr or not tw or not tr:
-                raise QueryParseError("TUNNEL CREATE requires 'src_wing/src_room -> tgt_wing/tgt_room' or 'FROM src_wing/src_room TO tgt_wing/tgt_room'")
+                raise QueryParseError(
+                    "TUNNEL CREATE requires 'src_wing/src_room -> tgt_wing/tgt_room' or 'FROM src_wing/src_room TO tgt_wing/tgt_room'"
+                )
 
             params = {"source_wing": sw, "source_room": sr, "target_wing": tw, "target_room": tr}
             if label:
@@ -1051,7 +1078,7 @@ def _parse_kg_supersede_tokens(tokens: List[str]) -> Dict[str, Any]:
 # ==============================================================================
 
 
-def parse_coordinate_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
+def parse_coordinate_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:  # noqa: C901
     """
     Parse input to `palace_coordinate`.
 
@@ -1061,11 +1088,32 @@ def parse_coordinate_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
     # 1. Structured JSON / Dict input
     if isinstance(input_data, dict):
         params = dict(input_data)
+        for k in ("command", "input", "dsl", "pql"):
+            if k in params and isinstance(params[k], str):
+                v_strip = params[k].strip()
+                first_w = v_strip.split(None, 1)[0].upper() if v_strip else ""
+                if first_w in (
+                    "TASK",
+                    "EVENT",
+                    "EVENTS",
+                    "LOGSTREAM",
+                    "ARTIFACT",
+                    "PATCH",
+                    "PEERS",
+                    "MESH",
+                ):
+                    op, parsed_p = parse_coordinate_input(v_strip)
+                    for pk, pv in params.items():
+                        if pk not in (k, "action", "target") and pk not in parsed_p:
+                            parsed_p[pk] = pv
+                    return op, parsed_p
         action = params.pop("action", None) or params.pop("target", None)
         if not action:
             if "goal" in params or "branch" in params or "base_commit" in params:
                 action = "task_create"
-            elif "event_type" in params or ("stream" in params and "room" in params and "type" in params):
+            elif "event_type" in params or (
+                "stream" in params and "room" in params and "type" in params
+            ):
                 action = "event_append"
             elif "artifact_id" in params:
                 action = "artifact_get"
@@ -1114,7 +1162,9 @@ def parse_coordinate_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
             pass
 
     if not isinstance(input_data, str):
-        raise QueryParseError(f"Expected string or dict coordinate input, got {type(input_data).__name__}")
+        raise QueryParseError(
+            f"Expected string or dict coordinate input, got {type(input_data).__name__}"
+        )
 
     raw_text = input_data.strip()
     if not raw_text:
@@ -1189,12 +1239,26 @@ def parse_coordinate_input(input_data: Any) -> Tuple[str, Dict[str, Any]]:
             kv.pop("to")
         if "since_id" in kv and "since_event_id" not in kv:
             kv["since_event_id"] = str(kv.pop("since_id"))
-        elif "since" in kv and "since_event_id" not in kv:
-            kv["since_event_id"] = str(kv.pop("since"))
+        elif "since" in kv and "since_event_id" not in kv and "since_created_at" not in kv:
+            raw_since = str(kv.pop("since"))
+            if _ISO_DATE_RE.match(raw_since):
+                kv["since_created_at"] = raw_since
+            elif raw_since.startswith("evt_"):
+                kv["since_event_id"] = raw_since
+            else:
+                raise QueryParseError(
+                    "EVENT LIST since: is ambiguous; use since_id:<event_id> or a YYYY-MM-DD timestamp"
+                )
         if "before_id" in kv and "before_event_id" not in kv:
             kv["before_event_id"] = str(kv.pop("before_id"))
         elif "before" in kv and "before_event_id" not in kv:
-            kv["before_event_id"] = str(kv.pop("before"))
+            raw_before = str(kv.pop("before"))
+            if raw_before.startswith("evt_"):
+                kv["before_event_id"] = raw_before
+            else:
+                raise QueryParseError(
+                    "EVENT LIST before: is not a resume cursor; use before_id:<event_id>"
+                )
         if "correlation" in kv and "correlation_id" not in kv:
             kv["correlation_id"] = str(kv.pop("correlation"))
         return "event_list", kv

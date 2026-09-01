@@ -3,7 +3,6 @@ test_mcp_light_server.py — Integration tests for Lightweight MemPalace MCP Ser
 """
 
 import json
-import pytest
 from mempalace import mcp_light_server, mcp_server
 from mempalace.palace_graph import invalidate_graph_cache
 
@@ -214,7 +213,7 @@ class TestPalaceCoordinate:
     def test_task_create_and_event_list(self, monkeypatch, config, kg):
         _patch_light_server(monkeypatch, config, kg)
         cmd = (
-            'TASK CREATE project:mempalace from:windows:antigravity:mempalace '
+            "TASK CREATE project:mempalace from:windows:antigravity:mempalace "
             'to:windows:claude:mempalace goal:"Implement PQL query engine" '
             'branch:feat/pql base:e4f5a6b7 done:"All unit tests pass"'
         )
@@ -268,7 +267,9 @@ class TestPalaceCoordinate:
         }
         get_res = mcp_light_server.handle_light_request(get_req)
         get_payload = json.loads(get_res["result"]["content"][0]["text"])
-        assert get_payload["artifact"]["content"] == "Architecture decision record: PQL 3-tool triad"
+        assert (
+            get_payload["artifact"]["content"] == "Architecture decision record: PQL 3-tool triad"
+        )
 
 
 class TestLightMcpPreflightAndGates:
@@ -313,3 +314,156 @@ class TestLightMcpPreflightAndGates:
         assert res["id"] == 71
         assert called_args["project_dir"] == "/custom/repo"
         assert called_args["apply"] is True
+
+    def test_read_only_blocks_filed_on_palace_query(self, monkeypatch, config, kg):
+        _patch_light_server(monkeypatch, config, kg)
+        monkeypatch.setattr(mcp_server, "_READ_ONLY", True)
+        req = {
+            "jsonrpc": "2.0",
+            "id": 72,
+            "method": "tools/call",
+            "params": {"name": "palace_query", "arguments": "FILED"},
+        }
+        res = mcp_light_server.handle_light_request(req)
+        assert res["error"]["code"] == -32003
+        assert res["error"]["data"]["tool"] == "mempalace_memories_filed_away"
+
+    def test_unknown_notification_has_no_response(self, monkeypatch, config, kg):
+        _patch_light_server(monkeypatch, config, kg)
+        req = {"jsonrpc": "2.0", "id": None, "method": "no/such/method", "params": {}}
+        assert mcp_light_server.handle_light_request(req) is None
+
+    def test_classify_filed_and_settings(self):
+        assert (
+            mcp_light_server._classify_underlying_tool("palace_query", "FILED")
+            == "mempalace_memories_filed_away"
+        )
+        assert (
+            mcp_light_server._classify_underlying_tool("palace_query", "SETTINGS")
+            == "mempalace_hook_settings"
+        )
+
+
+class TestUnwrapAndStructuredMerge:
+    def test_unwrap_keeps_sibling_limit(self):
+        raw = {"query": "hello", "limit": 5}
+        assert mcp_light_server._unwrap_wrapper_input(raw) == raw
+
+    def test_unwrap_keeps_mixed_dsl_and_fields(self):
+        raw = {"query": "FIND auth IN backend", "limit": 10, "wing": "core"}
+        assert mcp_light_server._unwrap_wrapper_input(raw) == raw
+
+    def test_unwrap_lone_dsl_string(self):
+        assert mcp_light_server._unwrap_wrapper_input({"query": "STATUS"}) == "STATUS"
+
+    def test_structured_search_limit_reaches_handler(self, monkeypatch, config, kg):
+        _patch_light_server(monkeypatch, config, kg)
+        captured = {}
+
+        def fake_search(**kwargs):
+            captured.update(kwargs)
+            return {"results": []}
+
+        monkeypatch.setattr(mcp_server, "tool_search", fake_search)
+        req = {
+            "jsonrpc": "2.0",
+            "id": 80,
+            "method": "tools/call",
+            "params": {
+                "name": "palace_query",
+                "arguments": {"query": "hello", "limit": 5},
+            },
+        }
+        mcp_light_server.handle_light_request(req)
+        assert captured.get("query") == "hello"
+        assert captured.get("limit") == 5
+
+
+class TestSearchEnrichment:
+    def test_keeps_searcher_order_and_tags_recency(self):
+        res = {
+            "results": [
+                {"text": "old-high", "distance": 0.1, "created_at": "2024-01-01T00:00:00"},
+                {"text": "new-low", "distance": 0.8, "created_at": "2026-01-01T00:00:00"},
+            ]
+        }
+        out = mcp_light_server._enrich_search_results(res)
+        assert [r["text"] for r in out["results"]] == ["old-high", "new-low"]
+        assert out["results"][0]["recency_rank"] == 2
+        assert out["results"][1]["recency_rank"] == 1
+        assert out["results"][1].get("is_latest_record") is True
+        assert "is_latest_record" not in out["results"][0]
+
+    def test_unknown_timestamp_is_oldest_not_latest(self):
+        res = {
+            "results": [
+                {"text": "dated", "distance": 0.2, "created_at": "2026-01-01T00:00:00"},
+                {"text": "undated", "distance": 0.3, "created_at": "unknown"},
+            ]
+        }
+        out = mcp_light_server._enrich_search_results(res)
+        undated = [r for r in out["results"] if r["text"] == "undated"][0]
+        dated = [r for r in out["results"] if r["text"] == "dated"][0]
+        assert dated["recency_rank"] == 1
+        assert undated["recency_rank"] == 2
+        assert undated.get("is_latest_record") is not True
+
+    def test_none_distance_does_not_raise(self):
+        res = {
+            "results": [
+                {"text": "bm25", "distance": None, "created_at": "2026-01-01T00:00:00"},
+                {"text": "vec", "distance": 0.4, "created_at": "2025-01-01T00:00:00"},
+            ]
+        }
+        out = mcp_light_server._enrich_search_results(res)
+        assert out["relevance_confidence"] == "moderate"
+        assert "warning" not in out
+
+    def test_tunnel_expansion_consumes_list(self, monkeypatch):
+        monkeypatch.setattr(
+            mcp_server,
+            "tool_follow_tunnels",
+            lambda wing, room: [
+                {"connected_wing": "guidelines", "connected_room": "rx", "drawer_id": "d1"}
+            ],
+        )
+        res = {
+            "results": [
+                {
+                    "text": "hit",
+                    "distance": 0.2,
+                    "wing": "patients",
+                    "room": "allergies",
+                    "created_at": "2026-01-01T00:00:00",
+                }
+            ]
+        }
+        out = mcp_light_server._enrich_search_results(res)
+        assert out["connected_tunnels"][0]["connected_wing"] == "guidelines"
+        assert "connected_room_context" not in out
+
+
+class TestFuzzyWing:
+    def test_substring_does_not_steal_writes(self, monkeypatch):
+        monkeypatch.setattr(
+            mcp_server,
+            "tool_list_wings",
+            lambda: {"wings": {"oauth_notes": 1, "project_auth": 2}},
+        )
+        assert mcp_light_server._resolve_fuzzy_wing("auth") == "project_auth"
+
+    def test_ambiguous_suffix_left_unchanged(self, monkeypatch):
+        monkeypatch.setattr(
+            mcp_server,
+            "tool_list_wings",
+            lambda: {"wings": {"core_auth": 1, "project_auth": 2}},
+        )
+        assert mcp_light_server._resolve_fuzzy_wing("auth") == "auth"
+
+    def test_substring_match_ignored(self, monkeypatch):
+        monkeypatch.setattr(
+            mcp_server,
+            "tool_list_wings",
+            lambda: {"wings": {"oauth_notes": 1}},
+        )
+        assert mcp_light_server._resolve_fuzzy_wing("auth") == "auth"
