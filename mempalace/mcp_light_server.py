@@ -1,0 +1,612 @@
+#!/usr/bin/env python3
+"""
+MemPalace Lightweight MCP Server
+================================
+Consolidates 45 MemPalace tools into a high-performance 3-tool interface
+(`palace_query`, `palace_exec`, `palace_coordinate`) powered by Palace Query
+Language (PQL) and Command DSL, while retaining 100% of underlying features,
+guarantees, and safety checks.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+import threading
+import time
+from typing import Any, Dict, Optional
+
+# stdio protection before heavy imports
+_REAL_STDOUT = sys.stdout
+_REAL_STDOUT_FD = None
+try:
+    _REAL_STDOUT_FD = os.dup(1)
+    os.dup2(2, 1)
+except (OSError, AttributeError):
+    pass
+sys.stdout = sys.stderr
+
+from .version import __version__
+from .query_parser import (
+    QueryParseError,
+    parse_coordinate_input,
+    parse_exec_input,
+    parse_query_input,
+)
+from . import mcp_server
+
+import inspect
+
+logger = logging.getLogger("mempalace_mcp_light")
+
+_PQL_KEYWORDS = {
+    "FIND", "SEARCH", "TAXONOMY", "WINGS", "ROOMS", "DRAWER", "DRAWERS",
+    "CHECK", "AAAK", "KG", "TRAVERSE", "TUNNEL", "TUNNELS", "FOLLOW",
+    "HALLWAY", "HALLWAYS", "GRAPH", "DIARY", "STATUS", "FILED", "SETTINGS",
+    "ADD", "UPDATE", "DELETE", "CREATE", "MINE", "SYNC", "CHECKPOINT", "RECONNECT",
+    "TASK", "EVENT", "EVENTS", "LOGSTREAM", "ARTIFACT", "PATCH", "PEERS", "MESH",
+}
+
+
+def _unwrap_wrapper_input(arguments: Any) -> Any:
+    """If arguments is a dict containing a command/input string, unwrap it."""
+    if not isinstance(arguments, dict):
+        return arguments
+
+    # Check common wrapper keys
+    for k in ("command", "input", "dsl", "pql", "query", "expression", "text", "prompt", "raw"):
+        if k in arguments and isinstance(arguments[k], str):
+            val_stripped = arguments[k].strip()
+            if not val_stripped:
+                continue
+            first_word = val_stripped.split(None, 1)[0].upper()
+            if first_word in _PQL_KEYWORDS or len(arguments) <= 2:
+                return val_stripped
+
+    return arguments
+
+
+def _call_handler_safe(handler, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Invoke handler safely by filtering extra kwargs that the handler doesn't accept."""
+    if not callable(handler):
+        return {"success": False, "error": f"Handler {handler} is not callable"}
+
+    sig = inspect.signature(handler)
+    has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+    if has_var_keyword:
+        return handler(**params)
+
+    mapped = dict(params)
+    # Common parameter name translations
+    if "entity" in mapped and "entity_name" in sig.parameters and "entity_name" not in mapped:
+        mapped["entity_name"] = mapped.pop("entity")
+    if "agent" in mapped and "agent_name" in sig.parameters and "agent_name" not in mapped:
+        mapped["agent_name"] = mapped.pop("agent")
+    if "content" in mapped and "entry" in sig.parameters and "entry" not in mapped:
+        mapped["entry"] = mapped.pop("content")
+    if "source" in mapped and "source_file" in sig.parameters and "source_file" not in mapped:
+        mapped["source_file"] = mapped.pop("source")
+    if "source" in mapped and "source_wing" in sig.parameters and "source_wing" not in mapped:
+        mapped["source_wing"] = mapped.pop("source")
+    if "target" in mapped and "target_wing" in sig.parameters and "target_wing" not in mapped:
+        mapped["target_wing"] = mapped.pop("target")
+
+    valid_kwargs = {k: v for k, v in mapped.items() if k in sig.parameters}
+    return handler(**valid_kwargs)
+
+
+def _resolve_fuzzy_wing(wing: Optional[str]) -> Optional[str]:
+    """If a wing name is shorthand (e.g. 'backend' for 'project_backend'), resolve it."""
+    if not wing:
+        return wing
+    try:
+        wings_resp = mcp_server.tool_list_wings()
+        if isinstance(wings_resp, dict) and "wings" in wings_resp:
+            known = wings_resp["wings"]
+            if wing in known:
+                return wing
+            w_low = wing.lower()
+            for kw in known:
+                kw_low = kw.lower()
+                if kw_low.endswith(f"_{w_low}") or kw_low.endswith(w_low) or w_low in kw_low:
+                    return kw
+    except Exception:
+        pass
+    return wing
+
+
+def _enrich_search_results(res: Dict[str, Any]) -> Dict[str, Any]:
+    """Enhance search results with temporal recency, relevance confidence, and tunnel links."""
+    if not isinstance(res, dict) or "results" not in res:
+        return res
+
+    results_list = res.get("results") or []
+    if not results_list:
+        res["status"] = "no_matching_memories_found"
+        res["total_found"] = 0
+        res["summary"] = "No matching memories found in the palace for this query."
+        return res
+
+    # 1. Relevance confidence gating
+    min_dist = min((item.get("distance", 1.0) for item in results_list), default=1.0)
+    if min_dist > 0.52:
+        res["relevance_confidence"] = "low"
+        res["warning"] = "Low semantic similarity. No confident memories found for this query."
+    elif min_dist < 0.35:
+        res["relevance_confidence"] = "high"
+    else:
+        res["relevance_confidence"] = "moderate"
+
+    # 2. Chronological & temporal ordering
+    def _sort_key(item):
+        return item.get("filed_at") or item.get("created_at") or ""
+
+    sorted_results = sorted(results_list, key=_sort_key, reverse=True)
+    for idx, item in enumerate(sorted_results, 1):
+        item["recency_rank"] = idx
+        if idx == 1 and len(sorted_results) > 1 and _sort_key(item):
+            item["is_latest_record"] = True
+
+    res["results"] = sorted_results
+
+    # 3. Tunnel graph expansion (single-hop connected room context)
+    top_item = sorted_results[0]
+    top_wing = top_item.get("wing")
+    top_room = top_item.get("room")
+    if top_wing and top_room:
+        try:
+            tunnels_resp = mcp_server.tool_find_tunnels(wing=top_wing, room=top_room)
+            tunnels = tunnels_resp.get("tunnels", []) if isinstance(tunnels_resp, dict) else []
+            if tunnels:
+                res["connected_tunnels"] = tunnels[:3]
+                first_tunnel = tunnels[0]
+                tgt_wing = first_tunnel.get("target_wing")
+                tgt_room = first_tunnel.get("target_room")
+                if tgt_wing and tgt_room:
+                    conn_drawers = mcp_server.tool_list_drawers(wing=tgt_wing, room=tgt_room, limit=1)
+                    if isinstance(conn_drawers, dict) and "drawers" in conn_drawers and conn_drawers["drawers"]:
+                        res["connected_room_context"] = {
+                            "room": f"{tgt_wing}/{tgt_room}",
+                            "tunnel_label": first_tunnel.get("label", ""),
+                            "drawer": conn_drawers["drawers"][0],
+                        }
+        except Exception:
+            pass
+
+    return res
+
+
+def tool_palace_query(arguments: Dict[str, Any] | str) -> Dict[str, Any]:
+    """Unified read tool for semantic search, taxonomy, KG, graph, diary, and status."""
+    query_input = _unwrap_wrapper_input(arguments)
+
+    try:
+        target, params = parse_query_input(query_input)
+    except QueryParseError as e:
+        return {"success": False, "error": f"PQL query parse error: {e}"}
+
+    # Resolve fuzzy wing names
+    if "wing" in params and isinstance(params["wing"], str):
+        params["wing"] = _resolve_fuzzy_wing(params["wing"])
+
+    # Dispatch to underlying handlers in mcp_server
+    if target in ("search", "find"):
+        raw_res = _call_handler_safe(mcp_server.tool_search, params)
+        return _enrich_search_results(raw_res)
+    elif target in ("taxonomy", "get_taxonomy"):
+        res = mcp_server.tool_get_taxonomy()
+        wing = params.get("wing")
+        if wing and isinstance(res, dict) and "taxonomy" in res:
+            tax = res["taxonomy"]
+            return {"taxonomy": {wing: tax.get(wing, {})}} if wing in tax else {"taxonomy": {}}
+        return res
+    elif target == "wings":
+        return mcp_server.tool_list_wings()
+    elif target == "rooms":
+        return _call_handler_safe(mcp_server.tool_list_rooms, params)
+    elif target == "drawer":
+        return _call_handler_safe(mcp_server.tool_get_drawer, params)
+    elif target == "drawers":
+        return _call_handler_safe(mcp_server.tool_list_drawers, params)
+    elif target == "check_duplicate":
+        return _call_handler_safe(mcp_server.tool_check_duplicate, params)
+    elif target == "aaak_spec":
+        return mcp_server.tool_get_aaak_spec()
+    elif target == "kg_query":
+        return _call_handler_safe(mcp_server.tool_kg_query, params)
+    elif target == "kg_timeline":
+        return _call_handler_safe(mcp_server.tool_kg_timeline, params)
+    elif target == "kg_stats":
+        return mcp_server.tool_kg_stats()
+    elif target == "traverse":
+        return _call_handler_safe(mcp_server.tool_traverse_graph, params)
+    elif target == "find_tunnels":
+        return _call_handler_safe(mcp_server.tool_find_tunnels, params)
+    elif target == "list_tunnels":
+        return _call_handler_safe(mcp_server.tool_list_tunnels, params)
+    elif target == "follow_tunnels":
+        return _call_handler_safe(mcp_server.tool_follow_tunnels, params)
+    elif target == "list_hallways":
+        return _call_handler_safe(mcp_server.tool_list_hallways, params)
+    elif target == "graph_stats":
+        return mcp_server.tool_graph_stats()
+    elif target == "diary_read":
+        return _call_handler_safe(mcp_server.tool_diary_read, params)
+    elif target == "status":
+        res = mcp_server.tool_status()
+        return mcp_server._decorate_mcp_tool_result("mempalace_status", res)
+    elif target == "filed":
+        return mcp_server.tool_memories_filed_away()
+    elif target == "settings":
+        return mcp_server.tool_hook_settings()
+    else:
+        return {"success": False, "error": f"Unknown palace_query target: '{target}'"}
+
+
+def tool_palace_exec(arguments: Dict[str, Any] | str) -> Dict[str, Any]:
+    """Unified write tool for drawers, KG facts, tunnels, diaries, and maintenance."""
+    exec_input = _unwrap_wrapper_input(arguments)
+
+    try:
+        action, params = parse_exec_input(exec_input)
+    except QueryParseError as e:
+        return {"success": False, "error": f"PQL exec parse error: {e}"}
+
+    # Dispatch to underlying handlers
+    if action == "add_drawer":
+        if "wing" in params:
+            params["wing"] = _resolve_fuzzy_wing(params["wing"])
+        return _call_handler_safe(mcp_server.tool_add_drawer, params)
+    elif action == "update_drawer":
+        if "wing" in params:
+            params["wing"] = _resolve_fuzzy_wing(params["wing"])
+        return _call_handler_safe(mcp_server.tool_update_drawer, params)
+    elif action == "delete_drawer":
+        return _call_handler_safe(mcp_server.tool_delete_drawer, params)
+    elif action == "delete_by_source":
+        return _call_handler_safe(mcp_server.tool_delete_by_source, params)
+    elif action == "checkpoint":
+        return _call_handler_safe(mcp_server.tool_checkpoint, params)
+    elif action == "mine":
+        return _call_handler_safe(mcp_server.tool_mine, params)
+    elif action == "sync":
+        return _call_handler_safe(mcp_server.tool_sync, params)
+    elif action == "kg_add":
+        return _call_handler_safe(mcp_server.tool_kg_add, params)
+    elif action == "kg_invalidate":
+        return _call_handler_safe(mcp_server.tool_kg_invalidate, params)
+    elif action == "kg_supersede":
+        return _call_handler_safe(mcp_server.tool_kg_supersede, params)
+    elif action == "create_tunnel":
+        if "source_wing" in params:
+            params["source_wing"] = _resolve_fuzzy_wing(params["source_wing"])
+        if "target_wing" in params:
+            params["target_wing"] = _resolve_fuzzy_wing(params["target_wing"])
+        return _call_handler_safe(mcp_server.tool_create_tunnel, params)
+    elif action == "delete_tunnel":
+        return _call_handler_safe(mcp_server.tool_delete_tunnel, params)
+    elif action == "delete_hallway":
+        return _call_handler_safe(mcp_server.tool_delete_hallway, params)
+    elif action == "diary_write":
+        if "wing" in params:
+            params["wing"] = _resolve_fuzzy_wing(params["wing"])
+        return _call_handler_safe(mcp_server.tool_diary_write, params)
+    elif action == "reconnect":
+        return mcp_server.tool_reconnect()
+    elif action == "hook_settings":
+        return _call_handler_safe(mcp_server.tool_hook_settings, params)
+    else:
+        return {"success": False, "error": f"Unknown palace_exec action: '{action}'"}
+
+
+def tool_palace_coordinate(arguments: Dict[str, Any] | str) -> Dict[str, Any]:
+    """Unified multi-agent coordination tool (RFC 003 logstream, tasks, artifacts, mesh)."""
+    coord_input = _unwrap_wrapper_input(arguments)
+
+    try:
+        action, params = parse_coordinate_input(coord_input)
+    except QueryParseError as e:
+        return {"success": False, "error": f"PQL coordinate parse error: {e}"}
+
+    if action == "task_create":
+        return _call_handler_safe(mcp_server.tool_task_create, params)
+    elif action == "event_append":
+        return _call_handler_safe(mcp_server.tool_event_append, params)
+    elif action == "event_list":
+        return _call_handler_safe(mcp_server.tool_event_list, params)
+    elif action == "event_wait":
+        return _call_handler_safe(mcp_server.tool_event_wait, params)
+    elif action == "event_ack":
+        return _call_handler_safe(mcp_server.tool_event_ack, params)
+    elif action == "artifact_put":
+        return _call_handler_safe(mcp_server.tool_artifact_put, params)
+    elif action == "artifact_get":
+        return _call_handler_safe(mcp_server.tool_artifact_get, params)
+    elif action == "patch_submit":
+        return _call_handler_safe(mcp_server.tool_patch_submit, params)
+    elif action in ("mesh_peers", "peers"):
+        return mcp_server.tool_mesh_peers()
+    else:
+        return {"success": False, "error": f"Unknown palace_coordinate action: '{action}'"}
+
+
+# ==================== LIGHTWEIGHT MCP TOOL DEFINITIONS ====================
+
+LIGHT_TOOLS = {
+    "palace_query": {
+        "description": (
+            "Unified Palace Query Engine. Retrieve memories, taxonomy, knowledge graph facts/timelines, "
+            "tunnels, hallways, agent diaries, and palace status. "
+            "Accepts a concise PQL DSL query string (e.g. 'FIND \"terms\" IN wing/room LIMIT 5', "
+            "'TAXONOMY', 'KG Max AS OF 2026-04-01', 'TRAVERSE auth-flow HOPS 2', 'DIARY agent LAST 5', "
+            "'STATUS') or a structured dict payload."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "PQL query DSL string (e.g. 'FIND auth IN backend/auth LIMIT 5' or 'STATUS')",
+                },
+                "target": {
+                    "type": "string",
+                    "description": (
+                        "Target domain: search, taxonomy, wings, rooms, drawer, drawers, check_duplicate, "
+                        "aaak_spec, kg_query, kg_timeline, kg_stats, traverse, find_tunnels, list_tunnels, "
+                        "follow_tunnels, list_hallways, graph_stats, diary_read, status, filed, settings"
+                    ),
+                },
+                "wing": {"type": "string", "description": "Wing filter (optional)"},
+                "room": {"type": "string", "description": "Room filter (optional)"},
+                "limit": {"type": "integer", "description": "Max results (optional)"},
+                "offset": {"type": "integer", "description": "Pagination offset (optional)"},
+                "since": {"type": "string", "description": "Start ISO date/datetime (optional)"},
+                "before": {"type": "string", "description": "End ISO date/datetime (optional)"},
+                "entity": {"type": "string", "description": "Entity for KG queries (optional)"},
+                "as_of": {"type": "string", "description": "Point-in-time date for KG queries (optional)"},
+                "direction": {"type": "string", "description": "outgoing, incoming, or both for KG (optional)"},
+                "start_room": {"type": "string", "description": "Starting room for graph traversal (optional)"},
+                "max_hops": {"type": "integer", "description": "Max traversal hops (default 2)"},
+                "agent_name": {"type": "string", "description": "Agent name for diary read (optional)"},
+                "content": {"type": "string", "description": "Content string for duplicate check (optional)"},
+            },
+        },
+        "handler": tool_palace_query,
+    },
+    "palace_exec": {
+        "description": (
+            "Unified Palace Execution Engine. Add/update/delete drawers, batch checkpoint, knowledge graph "
+            "fact lifecycle (add/invalidate/supersede), cross-wing tunnels, hallways, mining, sync, agent "
+            "diaries, and maintenance. "
+            "Accepts a concise command DSL string (e.g. 'ADD IN backend/auth \"content\"', "
+            "'DELETE DRAWER drw_123', 'KG ADD Max -> loves -> chess', 'KG SUPERSEDE Max -> grade: 6 => 7', "
+            "'MINE /path MODE projects', 'SYNC APPLY', 'RECONNECT') or a structured dict payload."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Command DSL string (e.g. 'ADD IN backend/auth \"content\"')",
+                },
+                "action": {
+                    "type": "string",
+                    "description": (
+                        "Action: add_drawer, update_drawer, delete_drawer, delete_by_source, checkpoint, "
+                        "mine, sync, kg_add, kg_invalidate, kg_supersede, create_tunnel, delete_tunnel, "
+                        "delete_hallway, diary_write, reconnect, hook_settings"
+                    ),
+                },
+                "wing": {"type": "string", "description": "Target wing (optional)"},
+                "room": {"type": "string", "description": "Target room (optional)"},
+                "content": {"type": "string", "description": "Verbatim content to store/update (optional)"},
+                "drawer_id": {"type": "string", "description": "Drawer ID for update/delete (optional)"},
+                "items": {"type": "array", "description": "Batch items for checkpoint (optional)"},
+                "diary": {"type": "object", "description": "Diary entry object for checkpoint (optional)"},
+                "source": {"type": "string", "description": "Source path for mine (optional)"},
+                "subject": {"type": "string", "description": "Subject for KG operations (optional)"},
+                "predicate": {"type": "string", "description": "Predicate for KG operations (optional)"},
+                "object": {"type": "string", "description": "Object for KG operations (optional)"},
+                "old_object": {"type": "string", "description": "Old object for KG supersede (optional)"},
+                "new_object": {"type": "string", "description": "New object for KG supersede (optional)"},
+            },
+        },
+        "handler": tool_palace_exec,
+    },
+    "palace_coordinate": {
+        "description": (
+            "Unified Multi-Agent Coordination Engine (RFC 003 / RFC 005). Immutable task delegation, "
+            "logstream event append/list/wait/ack, artifact put/get, patch submission, and mesh estate snapshot. "
+            "Accepts a concise coordination DSL string (e.g. 'TASK CREATE project:mempalace from:agent1 "
+            "to:agent2 goal:\"fix\" branch:b base:c done:\"done\"', 'EVENT APPEND type:task.request ...', "
+            "'EVENT LIST stream:project/x ...', 'EVENT WAIT correlation:task_1', 'EVENT ACK id:evt_1 "
+            "from:agent1 status:applied', 'ARTIFACT PUT kind:patch ...', 'PATCH SUBMIT ...', 'MESH PEERS') "
+            "or a structured dict payload."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Coordination DSL string (e.g. 'TASK CREATE project:x ...')",
+                },
+                "action": {
+                    "type": "string",
+                    "description": (
+                        "Action: task_create, event_append, event_list, event_wait, event_ack, "
+                        "artifact_put, artifact_get, patch_submit, mesh_peers"
+                    ),
+                },
+                "project": {"type": "string", "description": "Project routing name (optional)"},
+                "stream": {"type": "string", "description": "Logical stream (optional)"},
+                "room": {"type": "string", "description": "Sub-channel (optional)"},
+                "from_agent": {"type": "string", "description": "Writer agent identity (optional)"},
+                "to_agent": {"type": "string", "description": "Target agent identity (optional)"},
+                "goal": {"type": "string", "description": "Task goal (optional)"},
+                "branch": {"type": "string", "description": "Git branch (optional)"},
+                "base_commit": {"type": "string", "description": "Git commit SHA (optional)"},
+                "done": {"type": "string", "description": "Definition of done (optional)"},
+                "type": {"type": "string", "description": "Event type (optional)"},
+                "correlation_id": {"type": "string", "description": "Correlation ID (optional)"},
+                "status": {"type": "string", "description": "Status string (optional)"},
+                "body": {"type": "string", "description": "Event/ack body content (optional)"},
+                "content": {"type": "string", "description": "Artifact / Patch content (optional)"},
+                "artifact_id": {"type": "string", "description": "Artifact ID to get (optional)"},
+                "event_id": {"type": "string", "description": "Event ID to ack (optional)"},
+            },
+        },
+        "handler": tool_palace_coordinate,
+    },
+}
+
+
+# ==================== JSON-RPC REQUEST HANDLING ====================
+
+
+def handle_light_request(request: Dict[str, Any]) -> Dict[str, Any] | None:
+    """Handle one JSON-RPC request using the lightweight 3-tool interface."""
+    if not isinstance(request, dict):
+        return {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32600, "message": "Invalid Request"},
+        }
+
+    method = request.get("method") or ""
+    params = request.get("params") or {}
+    req_id = request.get("id")
+
+    if method == "initialize":
+        client_version = params.get("protocolVersion", mcp_server.SUPPORTED_PROTOCOL_VERSIONS[-1])
+        negotiated = (
+            client_version
+            if client_version in mcp_server.SUPPORTED_PROTOCOL_VERSIONS
+            else mcp_server.SUPPORTED_PROTOCOL_VERSIONS[0]
+        )
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "protocolVersion": negotiated,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "mempalace-light", "version": __version__},
+            },
+        }
+    elif method == "ping":
+        return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+    elif method.startswith("notifications/"):
+        return None
+    elif method == "tools/list":
+        # In read-only mode, only palace_query is exposed if desired, or all tools are available with write refusals
+        tools_list = []
+        for name, tool_def in LIGHT_TOOLS.items():
+            if mcp_server._READ_ONLY and name in ("palace_exec", "palace_coordinate"):
+                continue
+            tools_list.append(
+                {
+                    "name": name,
+                    "description": tool_def["description"],
+                    "inputSchema": tool_def["input_schema"],
+                }
+            )
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"tools": tools_list},
+        }
+    elif method == "tools/call":
+        if not isinstance(params, dict) or "name" not in params:
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32602, "message": "Invalid params: name required"},
+            }
+
+        tool_name = params["name"]
+        if tool_name not in LIGHT_TOOLS:
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"},
+            }
+
+        arguments = params.get("arguments") or {}
+
+        # Preflight gate checks
+        refusal = mcp_server._mcp_tool_preflight_refusal(req_id, tool_name)
+        if refusal is not None:
+            return refusal
+
+        try:
+            handler = LIGHT_TOOLS[tool_name]["handler"]
+            result = handler(arguments)
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(result, ensure_ascii=False, indent=2)
+                            if not isinstance(result, str)
+                            else result,
+                        }
+                    ]
+                },
+            }
+        except Exception as e:
+            return mcp_server._internal_tool_error(req_id, tool_name, e)
+
+    return {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "error": {"code": -32601, "message": f"Method not found: {method}"},
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="MemPalace Lightweight MCP Server")
+    parser.add_argument("--palace", help="Path to palace directory")
+    parser.add_argument("--collection", help="Chroma collection name")
+    parser.add_argument("--read-only", action="store_true", help="Run in read-only mode")
+    args = parser.parse_args()
+
+    if args.palace:
+        mcp_server._config.palace_path = args.palace
+    if args.collection:
+        mcp_server._config.collection_name = args.collection
+    if args.read_only:
+        mcp_server._READ_ONLY = True
+
+    # Run stdio protocol loop with lightweight dispatcher
+    mcp_server._restore_stdout()
+    logger.info("MemPalace Lightweight MCP Server starting (3 consolidated tools)...")
+
+    while True:
+        try:
+            line = sys.stdin.readline()
+        except KeyboardInterrupt:
+            break
+        if not line:
+            break
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        resp = handle_light_request(req)
+        if resp is not None:
+            try:
+                sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
+                sys.stdout.flush()
+            except (BrokenPipeError, OSError):
+                break
+
+
+if __name__ == "__main__":
+    main()

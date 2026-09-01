@@ -4020,7 +4020,16 @@ def tool_kg_query(entity: str, as_of: str = None, direction: str = "both"):
         return {"error": "direction must be 'outgoing', 'incoming', or 'both'"}
 
     results = _call_kg(lambda kg: kg.query_entity(entity, as_of=as_of, direction=direction))
-    return {"entity": entity, "as_of": as_of, "facts": results, "count": len(results)}
+    active = [r for r in results if r.get("current")]
+    historical = [r for r in results if not r.get("current")]
+    return {
+        "entity": entity,
+        "as_of": as_of,
+        "active_facts": active,
+        "historical_facts": historical,
+        "facts": results,
+        "count": len(results),
+    }
 
 
 def tool_kg_add(

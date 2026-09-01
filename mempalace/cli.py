@@ -2792,6 +2792,9 @@ def cmd_mcp(args):
     print("MemPalace MCP quick setup:")
     print(f"  claude mcp add mempalace -- {server_cmd}")
     print(f"  codex mcp add mempalace -- {server_cmd}")
+    print("\nLightweight MCP setup (3 consolidated tools, ~92% fewer schema tokens):")
+    print("  claude mcp add mempalace -- mempalace-light-mcp")
+    print("  codex mcp add mempalace -- mempalace-light-mcp")
     print("\nRun the server directly:")
     print(f"  {server_cmd}")
 
